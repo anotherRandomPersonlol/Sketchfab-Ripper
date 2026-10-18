@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.0
+
+### Fixed
+- Skinned models now export the real skeleton: bones with their names, their parents and a bind pose (inverse bind matrices). Before, every joint was a direct child of the skeleton root with an identity inverse bind matrix, so in Blender all bones sat at the root and a cleared pose (Alt+R, Alt+G, Alt+S) lost the shape ([#2](https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/issues/2)).
+- When the rig cannot be read, or a local bone matrix cannot be stored exactly, the skin uses the old flat joints. The console log shows which one was used and why.
+
 ## v1.3.2
 
 ### Changed
