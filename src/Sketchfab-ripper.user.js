@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.3.2
+// @version      1.4.0
 // @description  Download Sketchfab models as GLB: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @author       anotherRandomPersonlol
 // @license      MIT
@@ -125,6 +125,31 @@
                      + a[2*4+r]*b[c*4+2] + a[3*4+r]*b[c*4+3];
         }
         return o;
+    }
+
+    // Column-major 4x4 inverse. Returns null for a singular matrix (for example a bone scaled to 0).
+    function invertMat4(m) {
+        const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3], a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
+        const a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11], a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+        const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10;
+        const b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+        const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30;
+        const b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+        const det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+        let sc = 0;
+        for (let i = 0; i < 12; i++) if (i % 4 !== 3) sc = Math.max(sc, Math.abs(m[i]));
+        if (!isFinite(det) || Math.abs(det) <= 1e-12 * sc * sc * sc) return null;
+        const id = 1 / det;
+        return [
+            (a11 * b11 - a12 * b10 + a13 * b09) * id, (a02 * b10 - a01 * b11 - a03 * b09) * id,
+            (a31 * b05 - a32 * b04 + a33 * b03) * id, (a22 * b04 - a21 * b05 - a23 * b03) * id,
+            (a12 * b08 - a10 * b11 - a13 * b07) * id, (a00 * b11 - a02 * b08 + a03 * b07) * id,
+            (a32 * b02 - a30 * b05 - a33 * b01) * id, (a20 * b05 - a22 * b02 + a23 * b01) * id,
+            (a10 * b10 - a11 * b08 + a13 * b06) * id, (a01 * b08 - a00 * b10 - a03 * b06) * id,
+            (a30 * b04 - a31 * b02 + a33 * b00) * id, (a21 * b02 - a20 * b04 - a23 * b00) * id,
+            (a11 * b07 - a10 * b09 - a12 * b06) * id, (a00 * b09 - a01 * b07 + a02 * b06) * id,
+            (a31 * b01 - a30 * b03 - a32 * b00) * id, (a20 * b03 - a21 * b01 + a22 * b00) * id
+        ];
     }
 
     // Confirmed from OSG source: MatrixTransform stores local transform
@@ -769,6 +794,97 @@
             meshesOut.push({ world, palette: pal, weights: wts });
         });
         return { meshes: meshesOut };
+    }
+
+    // ====================================================================
+    // Bone hierarchy from the osgjs rig
+    // ====================================================================
+    // RigTransformHardware: palette[i] = invT * boneWorld_i * invBind_i * T (T: skeleton to geometry space).
+    // The joints are written in skeleton space: skeleton root node = meshWorld * invT, IBM_i = invBind_i * T,
+    // joint matrix G_i = T * palette_i * inverse(IBM_i) = boneWorld_i. Each joint node gets G_i relative to its
+    // parent joint, which is the bone's own local matrix in the viewer, so the export has real bones, parents,
+    // names and a bind pose. Returns { fail: reason } when the rig cannot be read or the check fails.
+    function palMat4(pal, i) {   // one 3x4 row-major palette entry -> column-major 4x4
+        const b = i * 12;
+        return [pal[b], pal[b + 4], pal[b + 8], 0, pal[b + 1], pal[b + 5], pal[b + 9], 0,
+                pal[b + 2], pal[b + 6], pal[b + 10], 0, pal[b + 3], pal[b + 7], pal[b + 11], 1];
+    }
+    function callOr(o, fn, field) {
+        try { if (o && typeof o[fn] === 'function') { const v = o[fn](); if (v) return v; } } catch (e) {}
+        return o ? o[field] : undefined;
+    }
+    function getRigInfo(obj, nJ) {
+        const impl = obj && obj._rigTransformImplementation;
+        if (!impl) return { fail: 'no rig implementation' };
+        const isBone = (b) => !!(b && (typeof b.getInvBindMatrixInSkeletonSpace === 'function' || b._invBindInSkeletonSpace));
+        const cands = [impl._bonePalette, callOr(impl, 'getBonePalette', '_bonePalette')];
+        Object.keys(impl).forEach((k) => { cands.push(impl[k]); });
+        let bones = null;
+        for (const c of cands) if (Array.isArray(c) && c.length && c.every(isBone)) { bones = c; break; }
+        if (!bones) return { fail: `no bone list (rig fields: ${Object.keys(impl).join(',')})` };
+        if (bones.length < nJ) return { fail: `bone list has ${bones.length} bones, palette has ${nJ}` };
+        const T = matToArr(callOr(obj, 'getMatrixFromSkeletonToGeometry', '_matrixFromSkeletonToGeometry')) || identityMat4();
+        const invT = matToArr(callOr(obj, 'getInvMatrixFromSkeletonToGeometry', '_invMatrixFromSkeletonToGeometry')) || invertMat4(T);
+        if (!invT) return { fail: 'skeleton to geometry matrix is singular' };
+        const index = new Map(), ibm = [], invIbm = [], parent = [], names = [], used = {};
+        for (let i = 0; i < nJ; i++) index.set(bones[i], i);
+        const live = impl._skinningAttribute && impl._skinningAttribute._matrixPalette;
+        let chk = 0, chkJ = -1, nChk = 0;
+        for (let i = 0; i < nJ; i++) {
+            const b = bones[i];
+            const ib = matToArr(callOr(b, 'getInvBindMatrixInSkeletonSpace', '_invBindInSkeletonSpace'));
+            if (!ib) return { fail: `bone ${i} has no inverse bind matrix` };
+            ibm.push(mulMat4(ib, T));
+            const inv = invertMat4(ibm[i]);
+            if (!inv) return { fail: `bone ${i} has a singular inverse bind matrix` };
+            invIbm.push(inv);
+            let p = b._parents && b._parents[0], g = 0, pi = -1;
+            while (p && g++ < 256) {
+                if (index.has(p)) { pi = index.get(p); break; }
+                p = p._parents && p._parents[0];
+            }
+            parent.push(pi);
+            let nm = String(callOr(b, 'getName', '_name') || `joint_${i}`), k = 2;
+            const base = nm;
+            while (used[nm]) nm = `${base}_${k++}`;
+            used[nm] = true;
+            names.push(nm);
+            // Check the formula against the live palette of the viewer.
+            const bw = matToArr(callOr(b, 'getMatrixInSkeletonSpace', '_boneInSkeletonSpace'));
+            if (live && live.length >= (i + 1) * 12 && bw) {
+                const P = palMat4(live, i), E = mulMat4(mulMat4(mulMat4(invT, bw), ib), T);
+                let mx = 0, sc = 1;
+                for (let q = 0; q < 16; q++) { mx = Math.max(mx, Math.abs(P[q] - E[q])); sc = Math.max(sc, Math.abs(P[q])); }
+                if (mx / sc > chk) { chk = mx / sc; chkJ = i; }
+                nChk++;
+            }
+        }
+        if (nChk < nJ) return { fail: `palette check not possible for ${nJ - nChk} of ${nJ} bones` };
+        if (chk > 1e-3) return { fail: `palette check failed (error ${chk.toExponential(2)} at bone ${chkJ})` };
+        for (let i = 0; i < nJ; i++) {   // a parent loop would break the node tree
+            let p = parent[i], g = 0;
+            while (p >= 0 && g++ <= nJ) p = parent[p];
+            if (p >= 0) return { fail: 'bone parents form a loop' };
+        }
+        return { bones: nJ, T, invT, ibm, invIbm, parent, names, check: chk, cache: new WeakMap() };
+    }
+    // Local joint matrices (relative to the parent joint) for one palette. Null when a parent joint
+    // is singular (scaled to 0), because the local matrix of its child is then undefined.
+    function rigLocals(rig, pal) {
+        let L = rig.cache.get(pal);
+        if (L !== undefined) return L;
+        const G = [];
+        for (let i = 0; i < rig.bones; i++) G.push(mulMat4(rig.T, mulMat4(palMat4(pal, i), rig.invIbm[i])));
+        L = [];
+        for (let i = 0; i < rig.bones; i++) {
+            const p = rig.parent[i];
+            if (p < 0) { L.push(G[i]); continue; }
+            const ip = invertMat4(G[p]);
+            if (!ip) { L = null; break; }
+            L.push(mulMat4(ip, G[i]));
+        }
+        rig.cache.set(pal, L);
+        return L;
     }
 
     // True when a frame at time t should be kept for the chosen RECORD_FPS (0 = keep every frame).
@@ -2702,19 +2818,53 @@
 
                 const W_mesh = computeWorldMatrix(obj);
 
+                // Real bone hierarchy when the rig can be read and every palette of this export gives
+                // local joint matrices that a glTF node can hold exactly (TRS). Otherwise flat joints
+                // (one joint per palette entry, identity inverse bind matrices), as before.
+                let rig = null;
+                const rigInfo = getRigInfo(obj, jointCount);
+                let rigFail = rigInfo.fail || '';
+                if (!rigFail) {
+                    const pals = [];
+                    if (hasFrames) tracks.forEach((t) => t.frames.forEach((f) => { const m = f.meshes[mIdx]; if (m && m.palette) pals.push(m.palette); }));
+                    else if (liveSnap && liveSnap[mIdx] && liveSnap[mIdx].palette) pals.push(liveSnap[mIdx].palette);
+                    const spm = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
+                    if (hasFrames && spm && spm.palette) pals.push(spm.palette);
+                    if (!pals.length) rigFail = 'no palette recorded';
+                    let worst = 0;
+                    for (let pq = 0; pq < pals.length && !rigFail; pq++) {
+                        if (pals[pq].length < jointCount * 12) { rigFail = 'a palette is shorter than the bone list'; break; }
+                        const L = rigLocals(rigInfo, pals[pq]);
+                        if (!L) { rigFail = 'a parent joint is scaled to 0 in some frame'; break; }
+                        for (let lj = 0; lj < jointCount; lj++) worst = Math.max(worst, trsError(L[lj]));
+                        if (worst > 1e-3) rigFail = `a local joint matrix has shear (${(worst * 100).toFixed(1)}%)`;
+                    }
+                    if (!rigFail) rig = rigInfo;
+                }
+                const jointMat = rig ? ((pal, jx) => rigLocals(rig, pal)[jx]) : expandMat3x4;
+                if (rig) {
+                    const nRoots = rig.parent.filter((p) => p < 0).length;
+                    log(`skin ${gltfSkins.length}: bone hierarchy, ${jointCount} bones, ${nRoots} root(s), palette check ${rig.check.toExponential(1)}`);
+                } else {
+                    log(`skin ${gltfSkins.length}: flat joints (${rigFail})`);
+                }
+
                 const skelRootIdx = nodes.length;
-                nodes.push({ name: `skel_root_${mIdx}`, matrix: W_mesh, children: [] });
+                nodes.push({ name: `skel_root_${mIdx}`, matrix: rig ? mulMat4(W_mesh, rig.invT) : W_mesh, children: [] });
 
                 const jointNodeIndices = [];
                 for (let ji = 0; ji < jointCount; ji++) {
-                    const jIdx = nodes.length;
-                    nodes.push({ name: `joint_${mIdx}_${ji}`, children: [] });
-                    nodes[skelRootIdx].children.push(jIdx);
-                    jointNodeIndices.push(jIdx);
+                    jointNodeIndices.push(nodes.length);
+                    nodes.push({ name: rig ? rig.names[ji] : `joint_${mIdx}_${ji}`, children: [] });
+                }
+                for (let ji = 0; ji < jointCount; ji++) {
+                    const pj = rig ? rig.parent[ji] : -1;
+                    nodes[pj < 0 ? skelRootIdx : jointNodeIndices[pj]].children.push(jointNodeIndices[ji]);
                 }
 
                 const ibmFlat = new Float32Array(jointCount * 16);
                 for (let pi2 = 0; pi2 < jointCount; pi2++) {
+                    if (rig) { for (let q = 0; q < 16; q++) ibmFlat[pi2 * 16 + q] = rig.ibm[pi2][q]; continue; }
                     ibmFlat[pi2 * 16 + 0]  = 1;
                     ibmFlat[pi2 * 16 + 5]  = 1;
                     ibmFlat[pi2 * 16 + 10] = 1;
@@ -2771,7 +2921,7 @@
                             for (let sfi = 0; sfi < sfr.length; sfi++) {
                                 const sfm = sfr[sfi].meshes[mIdx], spal = sfm && sfm.palette;
                                 if (!spal || spal.length < (sjn + 1) * 12) continue;
-                                const serr = trsError(expandMat3x4(spal, sjn));
+                                const serr = trsError(jointMat(spal, sjn));
                                 if (serr > decErr.max) { decErr.max = serr; decErr.joint = sjn; decErr.frame = sfi; }
                                 if (serr > 1e-3) { shearJ[sjn] = true; decErr.bad++; break; }
                             }
@@ -2784,7 +2934,7 @@
                             for (let qf = 0; qf < qfr.length; qf++) {
                                 const qfm = qfr[qf].meshes[mIdx], qpal = qfm && qfm.palette;
                                 if (!qpal || qpal.length < (sjn + 1) * 12) continue;
-                                const qsd = svdDecompose(expandMat3x4(qpal, sjn), null);
+                                const qsd = svdDecompose(jointMat(qpal, sjn), null);
                                 if (!qsd.uniform) { qCand = q4FromV(qsd.V); break; }
                             }
                         }
@@ -2794,7 +2944,7 @@
                             for (let qf2 = 0; qf2 < qfr2.length; qf2++) {
                                 const qfm2 = qfr2[qf2].meshes[mIdx], qpal2 = qfm2 && qfm2.palette;
                                 if (!qpal2 || qpal2.length < (sjn + 1) * 12) continue;
-                                const qe = trsError(mulMat4(expandMat3x4(qpal2, sjn), qCand));
+                                const qe = trsError(mulMat4(jointMat(qpal2, sjn), qCand));
                                 if (qe > qMax) qMax = qe;
                                 if (qe > 1e-3) { qOk = false; break; }
                             }
@@ -2813,7 +2963,7 @@
                             const fmeshJ = frC[fj].meshes[mIdx];
                             const palJ = fmeshJ && fmeshJ.palette;
                             const mJ = (palJ && palJ.length >= (jx + 1) * 12)
-                                   ? expandMat3x4(palJ, jx) : identityMat4();
+                                   ? jointMat(palJ, jx) : identityMat4();
                             if (prev !== null) {
                                 for (let vv = 0; vv < 16; vv++) {
                                     if (Math.abs(mJ[vv] - prev[vv]) > 1e-5 * Math.max(1, Math.abs(prev[vv]))) return true;
@@ -2831,7 +2981,7 @@
                     const jointDiffersFromRest = (jx, cx) => {
                         const f0 = tracks[cx].frames[0].meshes[mIdx], p0 = f0 && f0.palette;
                         if (!p0 || p0.length < (jx + 1) * 12 || restPalE.length < (jx + 1) * 12) return false;
-                        const a = expandMat3x4(p0, jx), b = expandMat3x4(restPalE, jx);
+                        const a = jointMat(p0, jx), b = jointMat(restPalE, jx);
                         for (let dv = 0; dv < 16; dv++) {
                             if (Math.abs(a[dv] - b[dv]) > 1e-5 * Math.max(1, Math.abs(b[dv]))) return true;
                         }
@@ -2879,7 +3029,7 @@
                                 const smats = [];
                                 for (let sfx = 0; sfx < useN; sfx++) {
                                     const sfmx = tr.frames[sfx].meshes[mIdx], spx = sfmx && sfmx.palette;
-                                    smats.push((spx && spx.length >= (jn + 1) * 12) ? expandMat3x4(spx, jn) : identityMat4());
+                                    smats.push((spx && spx.length >= (jn + 1) * 12) ? jointMat(spx, jn) : identityMat4());
                                 }
                                 svdSeq = svdSequence(smats);
                             }
@@ -2887,7 +3037,7 @@
                                 const fmesh = tr.frames[fi3].meshes[mIdx];
                                 const pal = fmesh && fmesh.palette;
                                 let mPal = (pal && pal.length >= (jn + 1) * 12)
-                                         ? expandMat3x4(pal, jn) : identityMat4();
+                                         ? jointMat(pal, jn) : identityMat4();
                                 if (ibmQ[jn]) mPal = mulMat4(mPal, ibmQ[jn]);
                                 if (shearJ[jn]) {
                                     const sd3 = svdSeq[fi3];
@@ -3006,7 +3156,7 @@
                             restSkipped++;   // palette shorter than the joint list: leave node default
                             continue;
                         }
-                        let pal0 = expandMat3x4(restPal, sj);
+                        let pal0 = jointMat(restPal, sj);
                         if (ibmQ[sj]) pal0 = mulMat4(pal0, ibmQ[sj]);
                         else if (!shearJ[sj] && !animatedJoints[jnIdx] && trsError(pal0) > 1e-3) {
                             setIbmQ(sj, q4FromV(svdDecompose(pal0, null).V)); ibmFixed++;   // static joint: P*Q is exact TRS
@@ -3034,7 +3184,7 @@
                     if (live && live.palette) {
                         for (let sj2 = 0; sj2 < jointCount; sj2++) {
                             if ((sj2 + 1) * 12 > live.palette.length) break;
-                            let lm = expandMat3x4(live.palette, sj2);
+                            let lm = jointMat(live.palette, sj2);
                             if (trsError(lm) > 1e-3) { setIbmQ(sj2, q4FromV(svdDecompose(lm, null).V)); lm = mulMat4(lm, ibmQ[sj2]); ibmFixed++; }
                             const dl = decomposeMat4(lm);
                             const jn2 = jointNodeIndices[sj2];

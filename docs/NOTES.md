@@ -11,7 +11,7 @@ Read the summary first. The sections after it record what we found and why the e
 4. Export (`downloadGLB`): wait for textures, merge metallic-roughness and opacity images, then `_downloadGLBSync` builds the glTF:
    - geometry: all triangle primitives merged into one triangle list, strips and fans converted, bridging slivers dropped;
    - materials: textures by channel, flat values from the material model for channels without a real image (colour atlas counts as no image), opacity merged into base colour alpha;
-   - skins: one flat joint per palette entry under `skel_root_<mesh>` (identity inverse bind matrices). Joints with shear get a helper parent (SVD: helper = T*U*S, joint = V^T);
+   - skins: the real bone hierarchy when the rig can be read (see Round 23); otherwise one flat joint per palette entry under `skel_root_<mesh>` (identity inverse bind matrices). Flat joints with shear get a helper parent (SVD: helper = T*U*S, joint = V^T);
    - animation: per clip, per joint T/R/S channels (helper and joint for sheared joints), hold keys for show/hide-by-scale switches;
    - unused textures pruned, file names made ASCII-safe, GLB plus textures zipped.
 
@@ -468,3 +468,14 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
 - `tools/migration/verify.js`: structure equal after converting back, scope resolution equal (7541 references), no hard hazards, 23 reviewed hazards (all safe, see tools/migration/README.md), no early calls. ESLint (no-undef, no-use-before-define, no-loop-func, no-const-assign): 0 messages. The keyframe reduction, node removal and overlay tests give the same output on both files.
 - Test before merge: the same models on v1.2.1 and on the branch, same log lines and same GLB size; validator unchanged.
 - Browser test (merged): AIM-9L and Treehouse byte-identical GLBs and logs on both versions; Simple rigged character (RECORD ALL CLIPS, Keep still clips) same log lines and same nodes/meshes/skins/channel targets, only ±1 frame and keyframe counts differ (recording jitter); Blu twice on the modern build differs by 607 keys, so the earlier ES5/modern key gap is jitter too; Light Ball (vertex colours, morph targets, morph and node animation) exports without errors.
+
+## Round 23: real bone hierarchy (v1.4.0, issue #2)
+
+- Issue #2: Simple rigged character, Static Pose, no recording. In Blender all bones were at the root, with no parents; clearing the pose broke the rig. Cause: flat joints with identity IBMs, so the bind pose of every bone is the skeleton root.
+- `getRigInfo(obj, n)` reads the osgjs rig: the bone list of `_rigTransformImplementation` (`_bonePalette`, or any array of objects with an inverse bind matrix), `getInvBindMatrixInSkeletonSpace()` / `_invBindInSkeletonSpace`, `getMatrixInSkeletonSpace()` / `_boneInSkeletonSpace`, the skeleton-to-geometry matrix T of the rig geometry (`_matrixFromSkeletonToGeometry`, inverse `_invMatrixFromSkeletonToGeometry`), bone names and parents (nearest ancestor in the bone list).
+- Check: the live palette must equal invT * boneWorld * invBind * T for every bone (relative error <= 1e-3), so the bone list order matches the palette.
+- Joints are written in skeleton space: skeleton root node = meshWorld * invT, IBM_i = invBind_i * T, joint G_i = T * palette_i * inverse(IBM_i) = boneWorld_i, node matrix = inverse(G_parent) * G_i. Recording is unchanged: every frame is converted from its palette. Skeleton space is needed because T can rotate: conjugating a bone with non-uniform scale by a rotation gives shear.
+- Fallback to flat joints when: no rig or bone list, the check fails or cannot run for every bone, a palette is shorter than the bone list, a parent joint is singular in some frame (bone scaled to 0, the child's local matrix is then undefined), or a local matrix has shear (TRS error > 1e-3). Log: `skin N: bone hierarchy, ...` or `skin N: flat joints (reason)`.
+- In hierarchy mode a joint that does not move in its own local space gets no channel (it follows its parent). The shear helper and the IBM Q fix do not run (the local matrices are checked to be TRS).
+- Offline test (fake rig: 6 palette bones in shuffled order, a non-palette helper bone between two bones, rotated and scaled T, non-uniform scale on a leaf): parents and names right, chain of locals * IBM equals the palette (error 7e-16), local TRS error 6e-8, bind pose equals boneWorld at bind. A reversed bone list fails the check; a zero-scaled parent gives the fallback.
+- Test needed in the browser: Simple rigged character (Static Pose and RECORD ALL CLIPS), the girl model (shear, zero-scaled parts), Blu; then Blender import and clearing the pose.

@@ -10,7 +10,7 @@ Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the
 
 ## Features
 
-- GLB export with skeleton and skinning.
+- GLB export with skeleton and skinning: bone names, parents and bind pose.
 - Animation recording: one full loop of the active clip, or all clips of a multi-clip model.
 - Animation of unskinned parts and of morph target weights.
 - PBR textures: base color, normal, metallic-roughness, emission, occlusion, opacity and alpha mask (cutout).
