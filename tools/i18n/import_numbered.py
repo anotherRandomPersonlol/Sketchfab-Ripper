@@ -48,7 +48,7 @@ def main():
                     problems.append(f'{k}: plural forms {miss} must be written by hand')
     if problems:
         sys.exit('import stopped:\n  ' + '\n  '.join(problems))
-    key = lang if re.fullmatch(r'[a-z]+', lang) else json.dumps(lang)
+    key = lang if re.fullmatch(r'[a-z]+', lang) else "'" + lang + "'"
     lines = [f'        {key}: {{']
     for k, v in table.items():
         if isinstance(v, dict):
@@ -63,7 +63,8 @@ def main():
     src = open(SRC, encoding='utf-8').read()
     end = src.index('    };\n    // @i18n-end')
     begin = src.index('// @i18n-begin')
-    pat = re.compile(r'\n        ' + re.escape(key) + r': \{\n.*?\n        \},\n', re.S)
+    keyre = re.escape(lang) if re.fullmatch(r'[a-z]+', lang) else '[\'"]' + re.escape(lang) + '[\'"]'
+    pat = re.compile(r'\n        ' + keyre + r': \{\n.*?\n        \},\n', re.S)
     m = pat.search(src, begin, end)
     if m:
         src = src[:m.start() + 1] + block + src[m.end():]
