@@ -176,7 +176,7 @@
             set_flat_mr: 'Flat metal/rough from viewer:',
             set_flat_mr_tip: 'On: materials without textures use the metalness and roughness of the viewer. Off: metalness 0, roughness 0.5.',
             set_scale: 'Export scale:',
-            set_scale_tip: 'Multiplies the size of the whole model. Use 0.01 for a model in centimeters.',
+            set_scale_tip: 'Multiplies the size of the whole model. Use 0.01 for a model in centimeters (comma or point).',
             set_mr_format: 'MR format:',
             set_mr_format_tip: 'File format of the merged metallic-roughness textures. JPEG: smaller files. PNG: no quality loss.',
             opt_jpeg: 'JPEG (small)',
@@ -201,12 +201,12 @@
             btn_cancelling: 'ANULOWANIE...',
             tip_no_clips: 'Ten model nie ma klipów animacji',
             tip_one_clip: 'Tylko jeden klip: użyj NAGRAJ JEDEN KLIP (automatycznie nagrywa jedną pełną pętlę)',
-            tip_busy: 'Zajęte: poczekaj, aż skończy się bieżące zadanie',
-            tip_busy_dl: 'Zajęte: poczekaj, aż skończy się nagrywanie lub eksport',
+            tip_busy: 'Trwa inne zadanie: poczekaj, aż się skończy',
+            tip_busy_dl: 'Trwa nagrywanie lub eksport: poczekaj, aż się skończy',
             st_idle: 'gotowy',
             st_rec: '● NAGR.',
             st_clips: '● KLIPY {p}',
-            st_line: '{state} · siatki: {m} · klatki: {f} · klipy: {c}',
+            st_line: '{state} · obiekty: {m} · klatki: {f} · klipy: {c}',
             st_rec_clips: ' (nagrane: {n})',
             st_no_anchors: '⚠ brak połączenia z podglądem 3D — odśwież stronę',
             pr_recording: 'Nagrywanie: {name}',
@@ -232,16 +232,16 @@
             pr_no_mr: 'brak map metaliczności/szorstkości',
             pr_op: 'przezroczystość {d}/{n}',
             pr_no_op: 'brak map przezroczystości',
-            pr_building: 'budowanie siatek, materiałów i klipów',
+            pr_building: 'budowanie obiektów 3D, materiałów i klipów',
             fbx_nodes: 'węzły',
             fbx_materials: 'materiały',
             fbx_geometry: 'geometria',
             fbx_geometry_n: 'geometria {i}/{n}',
             fbx_morph_targets: 'klucze kształtu',
-            fbx_skins: 'skórowanie',
+            fbx_skins: 'wagi kości',
             fbx_animation: 'animacja',
             fbx_animation_n: 'animacja {i}/{n}',
-            fbx_compressing: 'kompresja',
+            fbx_compressing: 'kompresowanie',
             fbx_writing_file: 'zapisywanie pliku',
             fbx_done: 'gotowe',
             set_language: 'Język:',
@@ -252,14 +252,14 @@
             set_fps: 'FPS nagrywania:',
             set_fps_tip: 'Klatki na sekundę w nagraniu. Maks. nagrywa każdą klatkę, którą rysuje podgląd 3D. Niższe wartości dają mniejsze pliki.',
             opt_fps_max: 'Maks. (każda klatka)',
-            set_reload: 'Auto-odświeżanie:',
+            set_reload: 'Automatyczne odświeżanie:',
             set_reload_tip: 'Włączone: odświeża stronę jeden raz, jeśli skrypt nie może połączyć się z podglądem 3D. Wyłączone: bez odświeżania.',
             set_double: 'Dwustronne:',
             set_double_tip: 'Włączone: materiały pokazują obie strony, tak jak w podglądzie 3D. Wyłączone: materiały pokazują tylko przednią stronę.',
-            set_single_auto: 'Auto jednostronne (flaga podglądu):',
+            set_single_auto: 'Jednostronne wg podglądu 3D:',
             set_single_auto_tip: 'Włączone: materiał, który podgląd 3D pokazuje jako jednostronny, zostaje jednostronny. Wyłączone: ustawienie Dwustronne dotyczy wszystkich materiałów.',
-            set_slivers: 'Usuń cienkie trójkąty (smugi):',
-            set_slivers_tip: 'Włączone: usuwa długie, cienkie trójkąty, które łączą oddzielne części siatki. Wyłączone: zostawia wszystkie trójkąty.',
+            set_slivers: 'Usuń cienkie trójkąty (paski):',
+            set_slivers_tip: 'Włączone: usuwa długie, cienkie trójkąty, które łączą oddzielne części obiektu i są widoczne jako paski. Wyłączone: zostawia wszystkie trójkąty.',
             set_reduce: 'Redukuj klatki kluczowe:',
             set_reduce_tip: 'Włączone: pomija klucze animacji, które już wynikają z kluczy przed nimi i po nich. Plik jest mniej więcej o połowę mniejszy. Wyłączone: zostawia każdą nagraną klatkę.',
             set_still: 'Zachowaj nieruchome klipy:',
@@ -269,7 +269,7 @@
             set_flat_mr: 'Metal./szorstk. z podglądu:',
             set_flat_mr_tip: 'Włączone: materiały bez tekstur dostają metaliczność i szorstkość z podglądu 3D. Wyłączone: metaliczność 0, szorstkość 0,5.',
             set_scale: 'Skala eksportu:',
-            set_scale_tip: 'Mnoży rozmiar całego modelu. Użyj 0,01 dla modelu w centymetrach.',
+            set_scale_tip: 'Mnoży rozmiar całego modelu. Użyj 0,01 dla modelu w centymetrach (przecinek lub kropka).',
             set_mr_format: 'Format MR:',
             set_mr_format_tip: 'Format pliku połączonych tekstur metaliczności i szorstkości. JPEG: mniejsze pliki. PNG: bez utraty jakości.',
             opt_jpeg: 'JPEG (mały)',
@@ -1980,15 +1980,17 @@
         label8.title = i18n('set_scale_tip');
         row8.appendChild(label8);
         const input8 = document.createElement('input');
-        input8.type = 'number';
-        input8.step = 'any';
-        input8.min = '0.0001';
-        input8.value = CONFIG.EXPORT_SCALE;
+        // text, not type=number: a number field rejects "0,01" in some browsers and languages
+        input8.type = 'text';
+        input8.inputMode = 'decimal';
+        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
+        const showNum = (v) => String(v).replace('.', decSep);
+        input8.value = showNum(CONFIG.EXPORT_SCALE);
         input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
         input8.addEventListener('change', () => {
-            let v = parseFloat(input8.value);
+            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
             if (isNaN(v) || v <= 0) v = 1;
-            input8.value = v;
+            input8.value = showNum(v);
             CONFIG.EXPORT_SCALE = v;
             saveConfig();
             log(`export scale set to ${v}`);
