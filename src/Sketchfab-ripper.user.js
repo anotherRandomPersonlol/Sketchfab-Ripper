@@ -1892,7 +1892,7 @@
         return null;
     }
 
-    function _mergeOneMR(cm) {
+    function _mergeOneMR(cm, forcePng) {
         const metalSan = cm.MetalnessPBR && cm.MetalnessPBR.name
                      ? sanitizeTextureName(cm.MetalnessPBR.name) : null;
         const roughSan = cm.RoughnessPBR && cm.RoughnessPBR.name
@@ -1948,7 +1948,7 @@
             const oc = document.createElement('canvas');
             oc.width = W; oc.height = H;
             oc.getContext('2d').putImageData(new ImageData(out, W, H), 0, 0);
-            const useJpeg = CONFIG.MR_TEXTURE_FORMAT !== 'png';
+            const useJpeg = !forcePng && CONFIG.MR_TEXTURE_FORMAT !== 'png';
             const mime = useJpeg ? 'image/jpeg' : 'image/png';
             const ext  = useJpeg ? '.jpg' : '.png';
             const q    = useJpeg ? 0.92 : undefined;
@@ -1958,8 +1958,11 @@
         });
     }
 
-    function mergeMRTextures() {
+    // onJob(done, total) after each merged material; forcePng: lossless (FBX splits the image again)
+    function mergeMRTextures(onJob, forcePng) {
         const jobs = [];
+        let done = 0;
+        const tick = () => { done++; if (onJob) onJob(done, jobs.length); };
         const seen = {};
         window.allmodel.forEach((obj, i) => {
             const ss = obj.stateset;
@@ -1972,7 +1975,7 @@
             if (seen[san]) return;
             seen[san] = true;
             jobs.push(
-                _mergeOneMR(cm).then((result) => {
+                _mergeOneMR(cm, forcePng).then((result) => {
                     if (!result || !result.blob) return;
                     const fname = `${san}_MR${result.ext}`;
                     objects[fname] = result.blob;
@@ -1986,9 +1989,10 @@
                     log('merged MR:', meshName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
                     warn('MR merge failed for', meshName, e.message);
-                })
+                }).then(tick)
             );
         });
+        if (onJob) onJob(0, jobs.length);
         return jobs.length ? Promise.all(jobs) : Promise.resolve();
     }
 
@@ -2078,7 +2082,9 @@
     let _opacityNoColor = {};   // sanitized mesh name -> merged opacity has no colour image (white RGB, alpha only)
     let _opacityOneFile = {};   // sanitized mesh name -> true when opacity lives in the base color file's alpha
 
-    function mergeOpacityTextures() {
+    function mergeOpacityTextures(onJob) {
+        let done = 0;
+        const tick = () => { done++; if (onJob) onJob(done, jobs.length); };
         _opacityOneFile = {};
         _opacityKind = {};
         _alphaFirst = {};
@@ -2126,9 +2132,10 @@
                     log('merged opacity:', meshName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
                     warn('opacity merge failed for', meshName, e.message);
-                })
+                }).then(tick)
             );
         });
+        if (onJob) onJob(0, jobs.length);
         return jobs.length ? Promise.all(jobs) : Promise.resolve();
     }
 
@@ -2155,9 +2162,12 @@
         return { expected, missing };
     }
 
-    function waitForTextures() {
+    // onProg(captured, expected, secondsLeft)
+    function waitForTextures(onProg) {
         const maxMs = (CONFIG.TEXTURE_WAIT_SECONDS || 0) * 1000;
         const first = textureReadiness();
+        const report = (r, left) => { if (onProg) onProg(r.expected - r.missing, r.expected, left); };
+        report(first, maxMs / 1000);
         if (maxMs <= 0 || first.missing === 0) return Promise.resolve();
         log('textures still loading: ' + (first.expected - first.missing) + '/' + first.expected +
             ' captured, waiting up to ' + CONFIG.TEXTURE_WAIT_SECONDS + 's (keep this tab visible)');
@@ -2166,6 +2176,7 @@
             (function poll() {
                 setTimeout(() => {
                     const r = textureReadiness(), captured = r.expected - r.missing, now = Date.now();
+                    report(r, Math.max(0, (maxMs - (now - start)) / 1000));
                     if (captured > lastCaptured) {
                         lastCaptured = captured;
                         lastProgressAt = now;
@@ -2205,9 +2216,17 @@
             : ['Waiting for textures', 'Merging textures', 'Building scene', 'Packing ZIP'];
         const stage = (k) => progStage(k + 1, stages.length, stages[k]);
         stage(0);
-        waitForTextures()
-            .then(() => { stage(1); return mergeMRTextures(); })
-            .then(mergeOpacityTextures)
+        waitForTextures((got, total, left) => {
+            if (!total) progSub(1, 'no textures');
+            else if (got >= total) progSub(1, `all ${total} captured`);
+            else progSub(got / total, `${got}/${total} captured, waiting up to ${Math.ceil(left)} s`);
+        })
+            .then(() => {
+                stage(1);
+                // two parts: metal/rough maps, then opacity into base colour alpha
+                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? `metal/rough ${d}/${n}` : 'no metal/rough maps'), format === 'fbx');
+            })
+            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? `opacity ${d}/${n}` : 'no opacity maps')))
             .then(() => { stage(2); progSub(-1, 'building meshes, materials and clips'); return nextPaint(); })
             .then(() => {
                 const built = _downloadGLBSync();
@@ -2231,6 +2250,7 @@
         Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
         for (const tn in built.zipTex) {
             if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
+                if (built.skipTex && built.skipTex[`textures/${built.zipTex[tn]}`]) continue;
                 zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
             }
         }
@@ -2279,12 +2299,13 @@
             const byUri = {};
             for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
             built.extraTex = [];
+            built.skipTex = {};
             let n = 0;
             return res.splits.reduce((p, sp) => p.then(() => {
                 progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
                 const src = byUri[sp.src];
                 if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
-                return splitChannel(src, sp.channel).then((b) => { if (b) built.extraTex.push({ path: sp.out, blob: b }); })
+                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
                     .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
             }), Promise.resolve()).then(() => {
                 if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
