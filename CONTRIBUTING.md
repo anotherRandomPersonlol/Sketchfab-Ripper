@@ -49,6 +49,27 @@ Do not attach exported files, textures or screenshots of models that you do not 
 - Increase `@version` in the script header and add a line to [`CHANGELOG.md`](CHANGELOG.md).
 - Put research notes and test results in [`docs/NOTES.md`](docs/NOTES.md).
 
+### Fix or add a translation
+
+The panel text is in the `STRINGS` table near the top of `src/Sketchfab-ripper.user.js`, between `// @i18n-begin` and `// @i18n-end`. English (`en`) is the base. The console log stays in English.
+
+To fix a text:
+
+1. Find the key of the text in the table of your language, for example `set_reduce_tip`.
+2. Change the text. Keep each part in curly brackets, for example `{n}` or `{name}`, exactly as in English.
+3. Run `python3 tools/i18n/check_strings.py`. Fix all errors that it shows.
+
+To add a language:
+
+1. Run `python3 tools/i18n/compare.py --export > en.txt`. The file has one numbered line for each English text.
+2. Translate the lines. Keep the numbers and the parts in curly brackets.
+3. Run `python3 tools/i18n/import_numbered.py <code> <file>`, for example `zh-CN zh.txt`. For a language with more plural forms than English (for example Polish or Russian), write the extra forms (`few`, `many`) by hand.
+4. Add the language name to `LANG_NAMES` and add `@name:<code>` and `@description:<code>` lines to the script header.
+5. Run `python3 tools/i18n/check_strings.py`. Fix all errors that it shows.
+6. Open the panel in your language and make sure that the buttons and the settings fit.
+
+To compare a translation with other translators, run `python3 tools/i18n/compare.py --compare <code> <file1> <file2> ...`. It shows only the lines that are different.
+
 ### Probes
 
 The [`tools/`](tools/) folder has read-only console probes. A probe shows how the viewer stores a part of the model, for example textures, materials or animation targets. To use a probe, open the console, change the context list (it shows **top**) to the viewer frame, and paste the probe.

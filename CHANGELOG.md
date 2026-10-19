@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.6.0
+
+### New
+- The panel is translated: English, Polish, Russian, Japanese, Korean, Spanish, Portuguese (Brazil), German, French and Simplified Chinese. It uses the language of your browser. The new **Language** setting changes it. The console log stays in English.
+- Greasy Fork shows the script in the search of these languages (localized name and description).
+- Issue form for translation problems.
+
+### Fixed
+- Export scale accepts a comma as the decimal separator (`0,01`). Before, some browsers did not accept `0,01` in the field.
+
+### Changed
+- The panel is wider while the settings are open, and progress texts wrap instead of being cut.
+
 ## v1.5.0
 
 ### New

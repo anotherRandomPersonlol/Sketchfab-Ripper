@@ -1,8 +1,26 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.5.0
+// @version      1.6.0
 // @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
+// @name:pl         Sketchfab Ripper
+// @description:pl  Pobieraj modele ze Sketchfab jako GLB lub FBX: szkielet, nagrane klipy animacji, tekstury PBR, kolory wierzchołków, klucze kształtu
+// @name:ru         Sketchfab Ripper
+// @description:ru  Скачивайте модели со Sketchfab в GLB или FBX: скелет, записанные клипы анимации, PBR-текстуры, цвета вершин, ключи формы
+// @name:ja         Sketchfab Ripper
+// @description:ja  Sketchfab のモデルを GLB または FBX でダウンロード: スケルトン、録画したアニメーションクリップ、PBR テクスチャ、頂点カラー、シェイプキー
+// @name:ko         Sketchfab Ripper
+// @description:ko  Sketchfab 모델을 GLB 또는 FBX로 다운로드: 스켈레톤, 녹화한 애니메이션 클립, PBR 텍스처, 버텍스 컬러, 셰이프 키
+// @name:es         Sketchfab Ripper
+// @description:es  Descarga modelos de Sketchfab en GLB o FBX: esqueleto, clips de animación grabados, texturas PBR, colores de vértice, claves de forma
+// @name:pt-BR      Sketchfab Ripper
+// @description:pt-BR Baixe modelos do Sketchfab em GLB ou FBX: esqueleto, clipes de animação gravados, texturas PBR, cores de vértice, shape keys
+// @name:de         Sketchfab Ripper
+// @description:de  Sketchfab-Modelle als GLB oder FBX herunterladen: Skelett, aufgenommene Animationsclips, PBR-Texturen, Vertexfarben, Shape Keys
+// @name:fr         Sketchfab Ripper
+// @description:fr  Téléchargez des modèles Sketchfab en GLB ou FBX : squelette, clips d’animation enregistrés, textures PBR, couleurs de sommets, clés de forme
+// @name:zh-CN      Sketchfab Ripper
+// @description:zh-CN 将 Sketchfab 模型下载为 GLB 或 FBX：骨骼、录制的动画片段、PBR 纹理、顶点颜色、形态键
 // @author       anotherRandomPersonlol
 // @license      MIT
 // @icon         https://raw.githubusercontent.com/anotherRandomPersonlol/Sketchfab-Ripper/main/docs/icon64.png
@@ -56,6 +74,7 @@
         REDUCE_KEYS: true,          // drop keyframes that interpolation between the kept keys already reproduces (tolerance scales with the model size)
         KEEP_STILL_CLIPS: false,    // true: a clip in which no joint moves is exported as a pose clip (2 equal keys); false: such clips are left out
         DOUBLE_SIDED_AUTO: true,    // true: follow the viewer's Single Sided flag per material (cullFace != 0 -> single sided); false: use DOUBLE_SIDED for all
+        LANGUAGE: 'auto',           // panel language: 'auto' (browser language) or a key of STRINGS ('en', 'pl')
         DOUBLE_SIDED: true          // true: mark every material doubleSided (matches Sketchfab's default, Single Sided OFF); untick for single-sided export
     };
     const CONFIG_KEY = 'ripper_config_v1';
@@ -81,6 +100,986 @@
     }
 
     loadConfig();
+
+    // ====================================================================
+    // UI text: English base + translations (the console log stays English)
+    // ====================================================================
+    // Keys used in code: i18n('key', {vars}) and i18nN('key', n, {vars}).
+    // A plural entry is an object of Intl.PluralRules forms (one/few/many/other).
+    // Check with: python3 tools/i18n/check_strings.py
+    // @i18n-begin
+    const STRINGS = {
+        en: {
+            settings: 'Settings',
+            sec_download: 'Download',
+            sec_animation: 'Animation',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Download a ZIP with a .glb file and its textures',
+            tip_fbx: 'Download a ZIP with a binary .fbx file (FBX 7.4) and its textures',
+            btn_rec_single: 'RECORD SINGLE CLIP',
+            btn_rec_all: 'RECORD ALL CLIPS',
+            btn_stop: 'STOP',
+            btn_cancel: 'CANCEL',
+            btn_cancelling: 'CANCELLING...',
+            tip_no_clips: 'No animation clips found on this model',
+            tip_one_clip: 'Only one clip: use RECORD SINGLE CLIP (records one full loop automatically)',
+            tip_busy: 'Busy: wait for the current job to end',
+            tip_busy_dl: 'Busy: wait for the recording or export to end',
+            st_idle: 'idle',
+            st_rec: '● REC',
+            st_clips: '● CLIPS {p}',
+            st_line: '{state} · meshes: {m} · frames: {f} · clips: {c}',
+            st_rec_clips: ' (recorded {n})',
+            st_no_anchors: '⚠ not connected to the viewer — reload the page',
+            pr_recording: 'Recording {name}',
+            pr_recording_manual: 'Recording (press STOP to end)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: 'Recorded {n} frame', other: 'Recorded {n} frames' },
+            pr_recorded_clips: { one: 'Recorded {n} clip', other: 'Recorded {n} clips' },
+            pr_recording_failed: 'Recording failed',
+            pr_recording_cancelled: 'Recording cancelled',
+            pr_done: 'Done',
+            pr_export_failed: 'Export failed',
+            pr_see_console: 'see the console for details',
+            stage_textures: 'Waiting for textures',
+            stage_merge: 'Merging textures',
+            stage_build: 'Building scene',
+            stage_fbx: 'Writing FBX',
+            stage_split: 'Splitting metal/rough maps',
+            stage_zip: 'Packing ZIP',
+            pr_no_textures: 'no textures',
+            pr_all_captured: 'all {n} captured',
+            pr_captured_wait: '{got}/{total} captured, waiting up to {s} s',
+            pr_mr: 'metal/rough {d}/{n}',
+            pr_no_mr: 'no metal/rough maps',
+            pr_op: 'opacity {d}/{n}',
+            pr_no_op: 'no opacity maps',
+            pr_building: 'building meshes, materials and clips',
+            fbx_nodes: 'nodes',
+            fbx_materials: 'materials',
+            fbx_geometry: 'geometry',
+            fbx_geometry_n: 'geometry {i}/{n}',
+            fbx_morph_targets: 'morph targets',
+            fbx_skins: 'skins',
+            fbx_animation: 'animation',
+            fbx_animation_n: 'animation {i}/{n}',
+            fbx_compressing: 'compressing',
+            fbx_writing_file: 'writing file',
+            fbx_done: 'done',
+            set_language: 'Language:',
+            set_language_tip: 'Language of this panel. Auto: the language of your browser.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Max seconds:',
+            set_max_seconds_tip: 'Stops a manual recording after this time. RECORD SINGLE CLIP and RECORD ALL CLIPS stop by themselves at the end of each clip.',
+            set_fps: 'Record FPS:',
+            set_fps_tip: 'Frames per second in the recording. Max records every frame the viewer draws. Lower values make smaller files.',
+            opt_fps_max: 'Max (every frame)',
+            set_reload: 'Auto-reload:',
+            set_reload_tip: 'On: reloads the page one time if the script cannot connect to the viewer. Off: no reload.',
+            set_double: 'Double sided:',
+            set_double_tip: 'On: materials show both sides, as in the viewer. Off: materials show the front side only.',
+            set_single_auto: 'Auto single sided (viewer flag):',
+            set_single_auto_tip: 'On: a material that the viewer shows single sided stays single sided. Off: the Double sided setting applies to all materials.',
+            set_slivers: 'Drop strip slivers (stripes):',
+            set_slivers_tip: 'On: removes long thin triangles that connect separate parts of a mesh. Off: keeps all triangles.',
+            set_reduce: 'Reduce keyframes:',
+            set_reduce_tip: 'On: leaves out animation keys that the keys before and after them already give. The file is about half as large. Off: keeps every recorded frame.',
+            set_still: 'Keep still clips:',
+            set_still_tip: 'On: a clip in which no joint moves (a pose clip) is exported as a pose of the skeleton. Off: such clips are left out of the file.',
+            set_vcolor: 'Vertex color sRGB>linear:',
+            set_vcolor_tip: 'On: converts vertex colors to linear color, as glTF requires. The colors then look as in the viewer. Off: writes the colors unchanged.',
+            set_flat_mr: 'Flat metal/rough from viewer:',
+            set_flat_mr_tip: 'On: materials without textures use the metalness and roughness of the viewer. Off: metalness 0, roughness 0.5.',
+            set_scale: 'Export scale:',
+            set_scale_tip: 'Multiplies the size of the whole model. Use 0.01 for a model in centimeters (comma or point).',
+            set_mr_format: 'MR format:',
+            set_mr_format_tip: 'File format of the merged metallic-roughness textures. JPEG: smaller files. PNG: no quality loss.',
+            opt_jpeg: 'JPEG (small)',
+            opt_png: 'PNG (lossless)',
+            set_rest: 'Rest pose:',
+            set_rest_tip: 'Sets the rest pose of the skeleton. Clip 1st frame: the first recorded frame. Static Pose: the Static Pose of the viewer.',
+            opt_clip0: 'Clip 1st frame',
+            opt_static: 'Static Pose',
+        },
+        pl: {
+            settings: 'Ustawienia',
+            sec_download: 'Pobierz',
+            sec_animation: 'Animacja',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Pobierz plik ZIP z plikiem .glb i jego teksturami',
+            tip_fbx: 'Pobierz plik ZIP z binarnym plikiem .fbx (FBX 7.4) i jego teksturami',
+            btn_rec_single: 'NAGRAJ JEDEN KLIP',
+            btn_rec_all: 'NAGRAJ WSZYSTKIE KLIPY',
+            btn_stop: 'ZATRZYMAJ',
+            btn_cancel: 'ANULUJ',
+            btn_cancelling: 'ANULOWANIE...',
+            tip_no_clips: 'Nie znaleziono klipów animacji w tym modelu',
+            tip_one_clip: 'Tylko jeden klip: użyj NAGRAJ JEDEN KLIP (automatycznie nagrywa jedną pełną pętlę)',
+            tip_busy: 'Trwa inne zadanie: poczekaj, aż się skończy',
+            tip_busy_dl: 'Trwa nagrywanie lub eksport: poczekaj, aż się skończy',
+            st_idle: 'gotowy',
+            st_rec: '● NAGR.',
+            st_clips: '● KLIPY {p}',
+            st_line: '{state} · obiekty: {m} · klatki: {f} · klipy: {c}',
+            st_rec_clips: ' (nagrano {n})',
+            st_no_anchors: '⚠ brak połączenia z podglądem 3D — odśwież stronę',
+            pr_recording: 'Nagrywanie: {name}',
+            pr_recording_manual: 'Nagrywanie (naciśnij ZATRZYMAJ, aby zakończyć)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: 'Nagrano {n} klatkę', few: 'Nagrano {n} klatki', many: 'Nagrano {n} klatek', other: 'Nagrano {n} klatki' },
+            pr_recorded_clips: { one: 'Nagrano {n} klip', few: 'Nagrano {n} klipy', many: 'Nagrano {n} klipów', other: 'Nagrano {n} klipu' },
+            pr_recording_failed: 'Nagrywanie nie powiodło się',
+            pr_recording_cancelled: 'Nagrywanie anulowane',
+            pr_done: 'Gotowe',
+            pr_export_failed: 'Eksport nie powiódł się',
+            pr_see_console: 'szczegóły znajdziesz w konsoli',
+            stage_textures: 'Oczekiwanie na tekstury',
+            stage_merge: 'Łączenie tekstur',
+            stage_build: 'Budowanie sceny',
+            stage_fbx: 'Zapisywanie pliku FBX',
+            stage_split: 'Rozdzielanie map metaliczności/szorstkości',
+            stage_zip: 'Pakowanie ZIP',
+            pr_no_textures: 'brak tekstur',
+            pr_all_captured: 'przechwycono wszystkie {n}',
+            pr_captured_wait: 'przechwycono {got}/{total}, oczekiwanie do {s} s',
+            pr_mr: 'metaliczność/szorstkość {d}/{n}',
+            pr_no_mr: 'brak map metaliczności/szorstkości',
+            pr_op: 'przezroczystość {d}/{n}',
+            pr_no_op: 'brak map przezroczystości',
+            pr_building: 'budowanie obiektów 3D, materiałów i klipów',
+            fbx_nodes: 'węzły',
+            fbx_materials: 'materiały',
+            fbx_geometry: 'geometria',
+            fbx_geometry_n: 'geometria {i}/{n}',
+            fbx_morph_targets: 'klucze kształtu',
+            fbx_skins: 'wagi kości',
+            fbx_animation: 'animacja',
+            fbx_animation_n: 'animacja {i}/{n}',
+            fbx_compressing: 'kompresowanie',
+            fbx_writing_file: 'zapisywanie pliku',
+            fbx_done: 'gotowe',
+            set_language: 'Język:',
+            set_language_tip: 'Język tego panelu. Auto: język Twojej przeglądarki.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Maks. sekund:',
+            set_max_seconds_tip: 'Zatrzymuje ręczne nagrywanie po tym czasie. NAGRAJ JEDEN KLIP i NAGRAJ WSZYSTKIE KLIPY kończą same na końcu każdego klipu.',
+            set_fps: 'FPS nagrywania:',
+            set_fps_tip: 'Klatki na sekundę w nagraniu. Maks. nagrywa każdą klatkę, którą rysuje podgląd 3D. Niższe wartości dają mniejsze pliki.',
+            opt_fps_max: 'Maks. (każda klatka)',
+            set_reload: 'Automatyczne odświeżanie:',
+            set_reload_tip: 'Włączone: odświeża stronę jeden raz, jeśli skrypt nie może połączyć się z podglądem 3D. Wyłączone: bez odświeżania.',
+            set_double: 'Dwustronne:',
+            set_double_tip: 'Włączone: materiały pokazują obie strony, tak jak w podglądzie 3D. Wyłączone: materiały pokazują tylko przednią stronę.',
+            set_single_auto: 'Jednostronne wg podglądu 3D:',
+            set_single_auto_tip: 'Włączone: materiał, który podgląd 3D pokazuje jako jednostronny, zostaje jednostronny. Wyłączone: ustawienie Dwustronne dotyczy wszystkich materiałów.',
+            set_slivers: 'Usuń cienkie trójkąty (paski):',
+            set_slivers_tip: 'Włączone: usuwa długie, cienkie trójkąty, które łączą oddzielne części obiektu i są widoczne jako paski. Wyłączone: zostawia wszystkie trójkąty.',
+            set_reduce: 'Redukuj klatki kluczowe:',
+            set_reduce_tip: 'Włączone: pomija klucze animacji, które już wynikają z kluczy przed nimi i po nich. Plik jest mniej więcej o połowę mniejszy. Wyłączone: zostawia każdą nagraną klatkę.',
+            set_still: 'Zachowaj nieruchome klipy:',
+            set_still_tip: 'Włączone: klip, w którym żadna kość się nie porusza (klip pozy), jest eksportowany jako poza szkieletu. Wyłączone: takie klipy są pomijane.',
+            set_vcolor: 'Kolory wierzchołków sRGB>liniowe:',
+            set_vcolor_tip: 'Włączone: zamienia kolory wierzchołków na liniowe, jak wymaga glTF. Kolory wyglądają wtedy tak jak w podglądzie 3D. Wyłączone: zapisuje kolory bez zmian.',
+            set_flat_mr: 'Metaliczność/szorstkość z podglądu:',
+            set_flat_mr_tip: 'Włączone: materiały bez tekstur dostają metaliczność i szorstkość z podglądu 3D. Wyłączone: metaliczność 0, szorstkość 0,5.',
+            set_scale: 'Skala eksportu:',
+            set_scale_tip: 'Mnoży rozmiar całego modelu. Użyj 0,01 dla modelu w centymetrach (przecinek lub kropka).',
+            set_mr_format: 'Format MR:',
+            set_mr_format_tip: 'Format pliku połączonych tekstur metaliczności i szorstkości. JPEG: mniejsze pliki. PNG: bez utraty jakości.',
+            opt_jpeg: 'JPEG (mały)',
+            opt_png: 'PNG (bezstratny)',
+            set_rest: 'Poza spoczynkowa:',
+            set_rest_tip: 'Ustawia pozę spoczynkową szkieletu. Pierwsza klatka klipu: pierwsza nagrana klatka. Poza statyczna: element „Static Pose” w podglądzie 3D.',
+            opt_clip0: 'Pierwsza klatka klipu',
+            opt_static: 'Poza statyczna',
+        },
+        ru: {
+            settings: 'Настройки',
+            sec_download: 'Скачать',
+            sec_animation: 'Анимация',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Скачать ZIP с файлом .glb и его текстурами',
+            tip_fbx: 'Скачать ZIP с двоичным файлом .fbx (FBX 7.4) и его текстурами',
+            btn_rec_single: 'ЗАПИСАТЬ ОДИН КЛИП',
+            btn_rec_all: 'ЗАПИСАТЬ ВСЕ КЛИПЫ',
+            btn_stop: 'СТОП',
+            btn_cancel: 'ОТМЕНА',
+            btn_cancelling: 'ОТМЕНА...',
+            tip_no_clips: 'У этой модели не найдено клипов анимации',
+            tip_one_clip: 'Только один клип: используйте ЗАПИСАТЬ ОДИН КЛИП (автоматически записывает один полный цикл)',
+            tip_busy: 'Идёт другая задача: дождитесь её окончания',
+            tip_busy_dl: 'Идёт запись или экспорт: дождитесь окончания',
+            st_idle: 'готов',
+            st_rec: '● ЗАП',
+            st_clips: '● КЛИПЫ {p}',
+            st_line: '{state} · объекты: {m} · кадры: {f} · клипы: {c}',
+            st_rec_clips: ' (записано {n})',
+            st_no_anchors: '⚠ нет связи с 3D-просмотром — перезагрузите страницу',
+            pr_recording: 'Запись: {name}',
+            pr_recording_manual: 'Запись (нажмите СТОП, чтобы закончить)',
+            pr_seconds: '{t} / {d} с',
+            pr_recorded_frames: { one: 'Записан {n} кадр', few: 'Записано {n} кадра', many: 'Записано {n} кадров', other: 'Записано {n} кадра' },
+            pr_recorded_clips: { one: 'Записан {n} клип', few: 'Записано {n} клипа', many: 'Записано {n} клипов', other: 'Записано {n} клипа' },
+            pr_recording_failed: 'Запись не удалась',
+            pr_recording_cancelled: 'Запись отменена',
+            pr_done: 'Готово',
+            pr_export_failed: 'Экспорт не удался',
+            pr_see_console: 'подробности в консоли',
+            stage_textures: 'Ожидание текстур',
+            stage_merge: 'Объединение текстур',
+            stage_build: 'Сборка сцены',
+            stage_fbx: 'Запись файла FBX',
+            stage_split: 'Разделение карт металличности/шероховатости',
+            stage_zip: 'Упаковка ZIP',
+            pr_no_textures: 'нет текстур',
+            pr_all_captured: 'получены все {n}',
+            pr_captured_wait: 'получено {got}/{total}, ожидание до {s} с',
+            pr_mr: 'металличность/шероховатость {d}/{n}',
+            pr_no_mr: 'нет карт металличности/шероховатости',
+            pr_op: 'прозрачность {d}/{n}',
+            pr_no_op: 'нет карт прозрачности',
+            pr_building: 'сборка 3D-объектов, материалов и клипов',
+            fbx_nodes: 'узлы',
+            fbx_materials: 'материалы',
+            fbx_geometry: 'геометрия',
+            fbx_geometry_n: 'геометрия {i}/{n}',
+            fbx_morph_targets: 'ключи формы',
+            fbx_skins: 'веса костей',
+            fbx_animation: 'анимация',
+            fbx_animation_n: 'анимация {i}/{n}',
+            fbx_compressing: 'сжатие',
+            fbx_writing_file: 'запись файла',
+            fbx_done: 'готово',
+            set_language: 'Язык:',
+            set_language_tip: 'Язык этой панели. Авто: язык вашего браузера.',
+            opt_auto: 'Авто',
+            set_max_seconds: 'Макс. секунд:',
+            set_max_seconds_tip: 'Останавливает ручную запись через это время. ЗАПИСАТЬ ОДИН КЛИП и ЗАПИСАТЬ ВСЕ КЛИПЫ останавливаются сами в конце каждого клипа.',
+            set_fps: 'FPS записи:',
+            set_fps_tip: 'Кадров в секунду в записи. Макс. записывает каждый кадр, который рисует 3D-просмотр. Меньшие значения дают файлы меньше.',
+            opt_fps_max: 'Макс. (каждый кадр)',
+            set_reload: 'Автоперезагрузка:',
+            set_reload_tip: 'Вкл.: перезагружает страницу один раз, если скрипт не может подключиться к 3D-просмотру. Выкл.: без перезагрузки.',
+            set_double: 'Двусторонние:',
+            set_double_tip: 'Вкл.: материалы видны с обеих сторон, как в 3D-просмотре. Выкл.: материалы видны только с лицевой стороны.',
+            set_single_auto: 'Односторонние по 3D-просмотру:',
+            set_single_auto_tip: 'Вкл.: материал, который 3D-просмотр показывает односторонним, остаётся односторонним. Выкл.: настройка «Двусторонние» действует для всех материалов.',
+            set_slivers: 'Убрать тонкие треугольники (полосы):',
+            set_slivers_tip: 'Вкл.: убирает длинные тонкие треугольники, которые соединяют отдельные части объекта и видны как полосы. Выкл.: оставляет все треугольники.',
+            set_reduce: 'Сократить ключевые кадры:',
+            set_reduce_tip: 'Вкл.: пропускает ключи анимации, которые уже следуют из ключей до и после них. Файл примерно вдвое меньше. Выкл.: оставляет каждый записанный кадр.',
+            set_still: 'Оставлять неподвижные клипы:',
+            set_still_tip: 'Вкл.: клип, в котором ни одна кость не движется (клип позы), экспортируется как поза скелета. Выкл.: такие клипы не попадают в файл.',
+            set_vcolor: 'Цвета вершин sRGB>линейные:',
+            set_vcolor_tip: 'Вкл.: переводит цвета вершин в линейные, как требует glTF. Тогда цвета выглядят как в 3D-просмотре. Выкл.: записывает цвета без изменений.',
+            set_flat_mr: 'Металличность/шероховатость из 3D-просмотра:',
+            set_flat_mr_tip: 'Вкл.: материалы без текстур получают металличность и шероховатость из 3D-просмотра. Выкл.: металличность 0, шероховатость 0,5.',
+            set_scale: 'Масштаб экспорта:',
+            set_scale_tip: 'Умножает размер всей модели. Для модели в сантиметрах введите 0,01 (запятая или точка).',
+            set_mr_format: 'Формат MR:',
+            set_mr_format_tip: 'Формат файлов объединённых текстур металличности и шероховатости. JPEG: файлы меньше. PNG: без потери качества.',
+            opt_jpeg: 'JPEG (меньше)',
+            opt_png: 'PNG (без потерь)',
+            set_rest: 'Поза покоя:',
+            set_rest_tip: 'Задаёт позу покоя скелета. Первый кадр клипа: первый записанный кадр. Статичная поза: пункт «Static Pose» в 3D-просмотре.',
+            opt_clip0: 'Первый кадр клипа',
+            opt_static: 'Статичная поза',
+        },
+        ja: {
+            settings: '設定',
+            sec_download: 'ダウンロード',
+            sec_animation: 'アニメーション',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: '.glb ファイルとテクスチャを ZIP でダウンロード',
+            tip_fbx: 'バイナリ .fbx ファイル (FBX 7.4) とテクスチャを ZIP でダウンロード',
+            btn_rec_single: '1クリップを録画',
+            btn_rec_all: '全クリップを録画',
+            btn_stop: '停止',
+            btn_cancel: 'キャンセル',
+            btn_cancelling: 'キャンセル中...',
+            tip_no_clips: 'このモデルにアニメーションクリップがありません',
+            tip_one_clip: 'クリップは1つだけです: 「1クリップを録画」を使ってください (1ループを自動で録画します)',
+            tip_busy: '処理中です: 現在の処理が終わるまでお待ちください',
+            tip_busy_dl: '録画またはエクスポート中です: 終わるまでお待ちください',
+            st_idle: '待機中',
+            st_rec: '● 録画',
+            st_clips: '● クリップ {p}',
+            st_line: '{state} · オブジェクト: {m} · フレーム: {f} · クリップ: {c}',
+            st_rec_clips: ' (録画済み {n})',
+            st_no_anchors: '⚠ 3Dビューアーに接続できません — ページを再読み込みしてください',
+            pr_recording: '録画中: {name}',
+            pr_recording_manual: '録画中 (停止を押すと終了)',
+            pr_seconds: '{t} / {d} 秒',
+            pr_recorded_frames: { other: '{n} フレームを録画しました' },
+            pr_recorded_clips: { other: '{n} クリップを録画しました' },
+            pr_recording_failed: '録画に失敗しました',
+            pr_recording_cancelled: '録画をキャンセルしました',
+            pr_done: '完了',
+            pr_export_failed: 'エクスポートに失敗しました',
+            pr_see_console: '詳細はコンソールを参照',
+            stage_textures: 'テクスチャを待機中',
+            stage_merge: 'テクスチャを結合中',
+            stage_build: 'シーンを構築中',
+            stage_fbx: 'FBX ファイルを書き出し中',
+            stage_split: 'メタリック/ラフネスマップを分割中',
+            stage_zip: 'ZIP を作成中',
+            pr_no_textures: 'テクスチャなし',
+            pr_all_captured: '{n} 個すべて取得済み',
+            pr_captured_wait: '{got}/{total} 取得済み、最大 {s} 秒待機',
+            pr_mr: 'メタリック/ラフネス {d}/{n}',
+            pr_no_mr: 'メタリック/ラフネスマップなし',
+            pr_op: '不透明度 {d}/{n}',
+            pr_no_op: '不透明度マップなし',
+            pr_building: '3Dオブジェクト、マテリアル、クリップを構築中',
+            fbx_nodes: 'ノード',
+            fbx_materials: 'マテリアル',
+            fbx_geometry: 'ジオメトリ',
+            fbx_geometry_n: 'ジオメトリ {i}/{n}',
+            fbx_morph_targets: 'シェイプキー',
+            fbx_skins: 'ボーンウェイト',
+            fbx_animation: 'アニメーション',
+            fbx_animation_n: 'アニメーション {i}/{n}',
+            fbx_compressing: '圧縮中',
+            fbx_writing_file: 'ファイル書き出し中',
+            fbx_done: '完了',
+            set_language: '言語:',
+            set_language_tip: 'このパネルの言語。自動: ブラウザの言語。',
+            opt_auto: '自動',
+            set_max_seconds: '最大秒数:',
+            set_max_seconds_tip: '手動録画をこの時間で停止します。「1クリップを録画」と「全クリップを録画」は各クリップの終わりで自動的に停止します。',
+            set_fps: '録画 FPS:',
+            set_fps_tip: '録画の1秒あたりのフレーム数。最大: 3Dビューアーが描画するすべてのフレームを録画します。値を下げるとファイルが小さくなります。',
+            opt_fps_max: '最大 (全フレーム)',
+            set_reload: '自動再読み込み:',
+            set_reload_tip: 'オン: スクリプトが3Dビューアーに接続できない場合、ページを1回だけ再読み込みします。オフ: 再読み込みしません。',
+            set_double: '両面:',
+            set_double_tip: 'オン: 3Dビューアーと同じく、マテリアルの両面を表示します。オフ: 表面だけを表示します。',
+            set_single_auto: '3Dビューアーに合わせて片面:',
+            set_single_auto_tip: 'オン: 3Dビューアーで片面表示のマテリアルは片面のままにします。オフ: 「両面」の設定をすべてのマテリアルに使います。',
+            set_slivers: '細い三角形を削除 (縞模様):',
+            set_slivers_tip: 'オン: オブジェクトの離れた部分をつなぐ、縞模様に見える細長い三角形を削除します。オフ: すべての三角形を残します。',
+            set_reduce: 'キーフレームを削減:',
+            set_reduce_tip: 'オン: 前後のキーから求められるアニメーションキーを省きます。ファイルは約半分になります。オフ: 録画したすべてのフレームを残します。',
+            set_still: '静止クリップを残す:',
+            set_still_tip: 'オン: どのボーンも動かないクリップ (ポーズクリップ) をスケルトンのポーズとしてエクスポートします。オフ: そのようなクリップはファイルに入れません。',
+            set_vcolor: '頂点カラー sRGB>リニア:',
+            set_vcolor_tip: 'オン: glTF の仕様どおり頂点カラーをリニアに変換します。色が3Dビューアーと同じに見えます。オフ: 色をそのまま書き出します。',
+            set_flat_mr: '3Dビューアーのメタリック/ラフネス:',
+            set_flat_mr_tip: 'オン: テクスチャのないマテリアルに3Dビューアーのメタリックとラフネスを使います。オフ: メタリック 0、ラフネス 0.5。',
+            set_scale: 'エクスポートの倍率:',
+            set_scale_tip: 'モデル全体のサイズを掛け算します。センチメートル単位のモデルには 0.01 を入力します (カンマでもピリオドでも可)。',
+            set_mr_format: 'MR 形式:',
+            set_mr_format_tip: '結合したメタリック/ラフネステクスチャのファイル形式。JPEG: ファイルが小さい。PNG: 画質の劣化なし。',
+            opt_jpeg: 'JPEG (小さい)',
+            opt_png: 'PNG (劣化なし)',
+            set_rest: 'レストポーズ:',
+            set_rest_tip: 'スケルトンのレストポーズを設定します。クリップの最初のフレーム: 最初に録画したフレーム。スタティックポーズ: 3Dビューアーの「Static Pose」。',
+            opt_clip0: 'クリップの最初のフレーム',
+            opt_static: 'スタティックポーズ',
+        },
+        ko: {
+            settings: '설정',
+            sec_download: '다운로드',
+            sec_animation: '애니메이션',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: '.glb 파일과 텍스처가 든 ZIP 다운로드',
+            tip_fbx: '바이너리 .fbx 파일(FBX 7.4)과 텍스처가 든 ZIP 다운로드',
+            btn_rec_single: '클립 하나 녹화',
+            btn_rec_all: '모든 클립 녹화',
+            btn_stop: '정지',
+            btn_cancel: '취소',
+            btn_cancelling: '취소하는 중...',
+            tip_no_clips: '이 모델에서 애니메이션 클립을 찾지 못했습니다',
+            tip_one_clip: '클립이 하나뿐입니다: 클립 하나 녹화를 사용하세요 (한 바퀴 전체를 자동으로 녹화합니다)',
+            tip_busy: '다른 작업 중입니다: 끝날 때까지 기다리세요',
+            tip_busy_dl: '녹화 또는 내보내기 중입니다: 끝날 때까지 기다리세요',
+            st_idle: '대기',
+            st_rec: '● 녹화',
+            st_clips: '● 클립 {p}',
+            st_line: '{state} · 오브젝트: {m} · 프레임: {f} · 클립: {c}',
+            st_rec_clips: ' (녹화됨 {n})',
+            st_no_anchors: '⚠ 3D 뷰어에 연결되지 않았습니다 — 페이지를 새로고침하세요',
+            pr_recording: '녹화 중: {name}',
+            pr_recording_manual: '녹화 중 (끝내려면 정지를 누르세요)',
+            pr_seconds: '{t} / {d}초',
+            pr_recorded_frames: { other: '프레임 {n}개를 녹화했습니다' },
+            pr_recorded_clips: { other: '클립 {n}개를 녹화했습니다' },
+            pr_recording_failed: '녹화에 실패했습니다',
+            pr_recording_cancelled: '녹화를 취소했습니다',
+            pr_done: '완료',
+            pr_export_failed: '내보내기에 실패했습니다',
+            pr_see_console: '자세한 내용은 콘솔을 보세요',
+            stage_textures: '텍스처를 기다리는 중',
+            stage_merge: '텍스처 합치는 중',
+            stage_build: '장면 만드는 중',
+            stage_fbx: 'FBX 파일 쓰는 중',
+            stage_split: '메탈릭/러프니스 맵 나누는 중',
+            stage_zip: 'ZIP 만드는 중',
+            pr_no_textures: '텍스처 없음',
+            pr_all_captured: '{n}개 모두 받음',
+            pr_captured_wait: '{got}/{total}개 받음, 최대 {s}초 기다림',
+            pr_mr: '메탈릭/러프니스 {d}/{n}',
+            pr_no_mr: '메탈릭/러프니스 맵 없음',
+            pr_op: '불투명도 {d}/{n}',
+            pr_no_op: '불투명도 맵 없음',
+            pr_building: '3D 오브젝트, 머티리얼, 클립 만드는 중',
+            fbx_nodes: '노드',
+            fbx_materials: '머티리얼',
+            fbx_geometry: '지오메트리',
+            fbx_geometry_n: '지오메트리 {i}/{n}',
+            fbx_morph_targets: '셰이프 키',
+            fbx_skins: '본 웨이트',
+            fbx_animation: '애니메이션',
+            fbx_animation_n: '애니메이션 {i}/{n}',
+            fbx_compressing: '압축 중',
+            fbx_writing_file: '파일 쓰는 중',
+            fbx_done: '완료',
+            set_language: '언어:',
+            set_language_tip: '이 패널의 언어. 자동: 브라우저 언어.',
+            opt_auto: '자동',
+            set_max_seconds: '최대 초:',
+            set_max_seconds_tip: '수동 녹화를 이 시간 뒤에 멈춥니다. 클립 하나 녹화와 모든 클립 녹화는 각 클립이 끝나면 스스로 멈춥니다.',
+            set_fps: '녹화 FPS:',
+            set_fps_tip: '녹화의 초당 프레임 수. 최대: 3D 뷰어가 그리는 모든 프레임을 녹화합니다. 값이 낮을수록 파일이 작아집니다.',
+            opt_fps_max: '최대 (모든 프레임)',
+            set_reload: '자동 새로고침:',
+            set_reload_tip: '켜짐: 스크립트가 3D 뷰어에 연결하지 못하면 페이지를 한 번 새로고침합니다. 꺼짐: 새로고침하지 않습니다.',
+            set_double: '양면:',
+            set_double_tip: '켜짐: 3D 뷰어처럼 머티리얼의 양면을 보여 줍니다. 꺼짐: 앞면만 보여 줍니다.',
+            set_single_auto: '3D 뷰어에 맞춰 단면:',
+            set_single_auto_tip: '켜짐: 3D 뷰어가 단면으로 보여 주는 머티리얼은 단면으로 둡니다. 꺼짐: 양면 설정을 모든 머티리얼에 적용합니다.',
+            set_slivers: '가는 삼각형 제거 (줄무늬):',
+            set_slivers_tip: '켜짐: 오브젝트의 떨어진 부분을 잇고 줄무늬로 보이는 길고 가는 삼각형을 없앱니다. 꺼짐: 모든 삼각형을 남깁니다.',
+            set_reduce: '키프레임 줄이기:',
+            set_reduce_tip: '켜짐: 앞뒤 키로 이미 알 수 있는 애니메이션 키를 뺍니다. 파일이 절반쯤 작아집니다. 꺼짐: 녹화한 모든 프레임을 남깁니다.',
+            set_still: '정지 클립 유지:',
+            set_still_tip: '켜짐: 움직이는 본이 없는 클립(포즈 클립)을 스켈레톤 포즈로 내보냅니다. 꺼짐: 그런 클립은 파일에 넣지 않습니다.',
+            set_vcolor: '버텍스 컬러 sRGB>선형:',
+            set_vcolor_tip: '켜짐: glTF 규칙대로 버텍스 컬러를 선형으로 바꿉니다. 그러면 색이 3D 뷰어와 같아 보입니다. 꺼짐: 색을 그대로 씁니다.',
+            set_flat_mr: '3D 뷰어의 메탈릭/러프니스:',
+            set_flat_mr_tip: '켜짐: 텍스처가 없는 머티리얼은 3D 뷰어의 메탈릭과 러프니스를 씁니다. 꺼짐: 메탈릭 0, 러프니스 0.5.',
+            set_scale: '내보내기 배율:',
+            set_scale_tip: '모델 전체 크기에 곱합니다. 센티미터 단위 모델은 0.01을 쓰세요 (쉼표나 마침표).',
+            set_mr_format: 'MR 형식:',
+            set_mr_format_tip: '합친 메탈릭-러프니스 텍스처의 파일 형식. JPEG: 파일이 작음. PNG: 화질 손실 없음.',
+            opt_jpeg: 'JPEG (작음)',
+            opt_png: 'PNG (무손실)',
+            set_rest: '레스트 포즈:',
+            set_rest_tip: '스켈레톤의 레스트 포즈를 정합니다. 클립 첫 프레임: 처음 녹화한 프레임. 스태틱 포즈: 3D 뷰어의 "Static Pose".',
+            opt_clip0: '클립 첫 프레임',
+            opt_static: '스태틱 포즈',
+        },
+        es: {
+            settings: 'Ajustes',
+            sec_download: 'Descargar',
+            sec_animation: 'Animación',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Descarga un ZIP con un archivo .glb y sus texturas',
+            tip_fbx: 'Descarga un ZIP con un archivo .fbx binario (FBX 7.4) y sus texturas',
+            btn_rec_single: 'GRABAR UN CLIP',
+            btn_rec_all: 'GRABAR TODOS LOS CLIPS',
+            btn_stop: 'DETENER',
+            btn_cancel: 'CANCELAR',
+            btn_cancelling: 'CANCELANDO...',
+            tip_no_clips: 'Este modelo no tiene clips de animación',
+            tip_one_clip: 'Solo hay un clip: usa GRABAR UN CLIP (graba un ciclo completo automáticamente)',
+            tip_busy: 'Hay otra tarea en curso: espera a que termine',
+            tip_busy_dl: 'Hay una grabación o exportación en curso: espera a que termine',
+            st_idle: 'listo',
+            st_rec: '● GRAB',
+            st_clips: '● CLIPS {p}',
+            st_line: '{state} · objetos: {m} · fotogramas: {f} · clips: {c}',
+            st_rec_clips: ' (grabados {n})',
+            st_no_anchors: '⚠ sin conexión con el visor 3D — recarga la página',
+            pr_recording: 'Grabando {name}',
+            pr_recording_manual: 'Grabando (pulsa DETENER para terminar)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: '{n} fotograma grabado', many: '{n} fotogramas grabados', other: '{n} fotogramas grabados' },
+            pr_recorded_clips: { one: '{n} clip grabado', many: '{n} clips grabados', other: '{n} clips grabados' },
+            pr_recording_failed: 'La grabación falló',
+            pr_recording_cancelled: 'Grabación cancelada',
+            pr_done: 'Listo',
+            pr_export_failed: 'La exportación falló',
+            pr_see_console: 'consulta la consola para ver los detalles',
+            stage_textures: 'Esperando texturas',
+            stage_merge: 'Combinando texturas',
+            stage_build: 'Construyendo la escena',
+            stage_fbx: 'Escribiendo el archivo FBX',
+            stage_split: 'Separando mapas de metálico/rugosidad',
+            stage_zip: 'Empaquetando ZIP',
+            pr_no_textures: 'sin texturas',
+            pr_all_captured: 'capturadas las {n}',
+            pr_captured_wait: '{got}/{total} capturadas, esperando hasta {s} s',
+            pr_mr: 'metálico/rugosidad {d}/{n}',
+            pr_no_mr: 'sin mapas de metálico/rugosidad',
+            pr_op: 'opacidad {d}/{n}',
+            pr_no_op: 'sin mapas de opacidad',
+            pr_building: 'construyendo objetos 3D, materiales y clips',
+            fbx_nodes: 'nodos',
+            fbx_materials: 'materiales',
+            fbx_geometry: 'geometría',
+            fbx_geometry_n: 'geometría {i}/{n}',
+            fbx_morph_targets: 'claves de forma',
+            fbx_skins: 'pesos de huesos',
+            fbx_animation: 'animación',
+            fbx_animation_n: 'animación {i}/{n}',
+            fbx_compressing: 'comprimiendo',
+            fbx_writing_file: 'escribiendo el archivo',
+            fbx_done: 'listo',
+            set_language: 'Idioma:',
+            set_language_tip: 'Idioma de este panel. Auto: el idioma de tu navegador.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Segundos máx.:',
+            set_max_seconds_tip: 'Detiene una grabación manual tras este tiempo. GRABAR UN CLIP y GRABAR TODOS LOS CLIPS se detienen solos al final de cada clip.',
+            set_fps: 'FPS de grabación:',
+            set_fps_tip: 'Fotogramas por segundo en la grabación. Máx. graba cada fotograma que dibuja el visor 3D. Los valores bajos dan archivos más pequeños.',
+            opt_fps_max: 'Máx. (cada fotograma)',
+            set_reload: 'Recarga automática:',
+            set_reload_tip: 'Activado: recarga la página una vez si el script no puede conectar con el visor 3D. Desactivado: no recarga.',
+            set_double: 'Doble cara:',
+            set_double_tip: 'Activado: los materiales muestran ambas caras, como en el visor 3D. Desactivado: solo muestran la cara frontal.',
+            set_single_auto: 'Una cara según el visor 3D:',
+            set_single_auto_tip: 'Activado: un material que el visor 3D muestra a una cara sigue siendo de una cara. Desactivado: el ajuste Doble cara se aplica a todos los materiales.',
+            set_slivers: 'Quitar triángulos finos (rayas):',
+            set_slivers_tip: 'Activado: quita los triángulos largos y finos que unen partes separadas de un objeto y se ven como rayas. Desactivado: conserva todos los triángulos.',
+            set_reduce: 'Reducir fotogramas clave:',
+            set_reduce_tip: 'Activado: omite las claves de animación que ya se deducen de las claves anteriores y posteriores. El archivo ocupa más o menos la mitad. Desactivado: conserva cada fotograma grabado.',
+            set_still: 'Conservar clips quietos:',
+            set_still_tip: 'Activado: un clip en el que ningún hueso se mueve (un clip de pose) se exporta como una pose del esqueleto. Desactivado: esos clips no se incluyen en el archivo.',
+            set_vcolor: 'Color de vértices sRGB>lineal:',
+            set_vcolor_tip: 'Activado: convierte los colores de vértice a lineales, como exige glTF. Así los colores se ven como en el visor 3D. Desactivado: escribe los colores sin cambios.',
+            set_flat_mr: 'Metálico/rugosidad del visor:',
+            set_flat_mr_tip: 'Activado: los materiales sin texturas usan el metálico y la rugosidad del visor 3D. Desactivado: metálico 0, rugosidad 0,5.',
+            set_scale: 'Escala de exportación:',
+            set_scale_tip: 'Multiplica el tamaño de todo el modelo. Usa 0,01 para un modelo en centímetros (coma o punto).',
+            set_mr_format: 'Formato MR:',
+            set_mr_format_tip: 'Formato de archivo de las texturas combinadas de metálico y rugosidad. JPEG: archivos más pequeños. PNG: sin pérdida de calidad.',
+            opt_jpeg: 'JPEG (pequeño)',
+            opt_png: 'PNG (sin pérdida)',
+            set_rest: 'Pose de reposo:',
+            set_rest_tip: 'Define la pose de reposo del esqueleto. Primer fotograma del clip: el primer fotograma grabado. Pose estática: la opción «Static Pose» del visor 3D.',
+            opt_clip0: 'Primer fotograma del clip',
+            opt_static: 'Pose estática',
+        },
+        'pt-BR': {
+            settings: 'Configurações',
+            sec_download: 'Baixar',
+            sec_animation: 'Animação',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Baixar um ZIP com um arquivo .glb e suas texturas',
+            tip_fbx: 'Baixar um ZIP com um arquivo .fbx binário (FBX 7.4) e suas texturas',
+            btn_rec_single: 'GRAVAR UM CLIPE',
+            btn_rec_all: 'GRAVAR TODOS OS CLIPES',
+            btn_stop: 'PARAR',
+            btn_cancel: 'CANCELAR',
+            btn_cancelling: 'CANCELANDO...',
+            tip_no_clips: 'Este modelo não tem clipes de animação',
+            tip_one_clip: 'Só há um clipe: use GRAVAR UM CLIPE (grava um ciclo completo automaticamente)',
+            tip_busy: 'Outra tarefa em andamento: espere terminar',
+            tip_busy_dl: 'Gravação ou exportação em andamento: espere terminar',
+            st_idle: 'pronto',
+            st_rec: '● GRAV',
+            st_clips: '● CLIPES {p}',
+            st_line: '{state} · objetos: {m} · quadros: {f} · clipes: {c}',
+            st_rec_clips: ' (gravados {n})',
+            st_no_anchors: '⚠ sem conexão com o visualizador 3D — recarregue a página',
+            pr_recording: 'Gravando {name}',
+            pr_recording_manual: 'Gravando (clique em PARAR para terminar)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: '{n} quadro gravado', many: '{n} quadros gravados', other: '{n} quadros gravados' },
+            pr_recorded_clips: { one: '{n} clipe gravado', many: '{n} clipes gravados', other: '{n} clipes gravados' },
+            pr_recording_failed: 'A gravação falhou',
+            pr_recording_cancelled: 'Gravação cancelada',
+            pr_done: 'Pronto',
+            pr_export_failed: 'A exportação falhou',
+            pr_see_console: 'veja os detalhes no console',
+            stage_textures: 'Aguardando texturas',
+            stage_merge: 'Combinando texturas',
+            stage_build: 'Montando a cena',
+            stage_fbx: 'Gravando o arquivo FBX',
+            stage_split: 'Separando mapas de metálico/rugosidade',
+            stage_zip: 'Compactando ZIP',
+            pr_no_textures: 'sem texturas',
+            pr_all_captured: 'todas as {n} capturadas',
+            pr_captured_wait: '{got}/{total} capturadas, aguardando até {s} s',
+            pr_mr: 'metálico/rugosidade {d}/{n}',
+            pr_no_mr: 'sem mapas de metálico/rugosidade',
+            pr_op: 'opacidade {d}/{n}',
+            pr_no_op: 'sem mapas de opacidade',
+            pr_building: 'montando objetos 3D, materiais e clipes',
+            fbx_nodes: 'nós',
+            fbx_materials: 'materiais',
+            fbx_geometry: 'geometria',
+            fbx_geometry_n: 'geometria {i}/{n}',
+            fbx_morph_targets: 'shape keys',
+            fbx_skins: 'pesos dos ossos',
+            fbx_animation: 'animação',
+            fbx_animation_n: 'animação {i}/{n}',
+            fbx_compressing: 'compactando',
+            fbx_writing_file: 'gravando o arquivo',
+            fbx_done: 'pronto',
+            set_language: 'Idioma:',
+            set_language_tip: 'Idioma deste painel. Auto: o idioma do seu navegador.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Segundos máx.:',
+            set_max_seconds_tip: 'Para uma gravação manual depois deste tempo. GRAVAR UM CLIPE e GRAVAR TODOS OS CLIPES param sozinhos no fim de cada clipe.',
+            set_fps: 'FPS da gravação:',
+            set_fps_tip: 'Quadros por segundo na gravação. Máx. grava cada quadro que o visualizador 3D desenha. Valores menores geram arquivos menores.',
+            opt_fps_max: 'Máx. (cada quadro)',
+            set_reload: 'Recarregar sozinho:',
+            set_reload_tip: 'Ligado: recarrega a página uma vez se o script não conseguir conectar ao visualizador 3D. Desligado: não recarrega.',
+            set_double: 'Dupla face:',
+            set_double_tip: 'Ligado: os materiais mostram os dois lados, como no visualizador 3D. Desligado: mostram só o lado da frente.',
+            set_single_auto: 'Face única conforme o visualizador:',
+            set_single_auto_tip: 'Ligado: um material que o visualizador 3D mostra com face única continua com face única. Desligado: a configuração Dupla face vale para todos os materiais.',
+            set_slivers: 'Remover triângulos finos (listras):',
+            set_slivers_tip: 'Ligado: remove triângulos longos e finos que ligam partes separadas de um objeto e aparecem como listras. Desligado: mantém todos os triângulos.',
+            set_reduce: 'Reduzir quadros-chave:',
+            set_reduce_tip: 'Ligado: deixa de fora as chaves de animação que já resultam das chaves antes e depois delas. O arquivo fica com cerca de metade do tamanho. Desligado: mantém cada quadro gravado.',
+            set_still: 'Manter clipes parados:',
+            set_still_tip: 'Ligado: um clipe em que nenhum osso se move (um clipe de pose) é exportado como uma pose do esqueleto. Desligado: esses clipes ficam fora do arquivo.',
+            set_vcolor: 'Cor de vértice sRGB>linear:',
+            set_vcolor_tip: 'Ligado: converte as cores de vértice para linear, como o glTF exige. As cores ficam como no visualizador 3D. Desligado: grava as cores sem mudança.',
+            set_flat_mr: 'Metálico/rugosidade do visualizador:',
+            set_flat_mr_tip: 'Ligado: materiais sem texturas usam o metálico e a rugosidade do visualizador 3D. Desligado: metálico 0, rugosidade 0,5.',
+            set_scale: 'Escala de exportação:',
+            set_scale_tip: 'Multiplica o tamanho do modelo inteiro. Use 0,01 para um modelo em centímetros (vírgula ou ponto).',
+            set_mr_format: 'Formato MR:',
+            set_mr_format_tip: 'Formato de arquivo das texturas combinadas de metálico e rugosidade. JPEG: arquivos menores. PNG: sem perda de qualidade.',
+            opt_jpeg: 'JPEG (pequeno)',
+            opt_png: 'PNG (sem perda)',
+            set_rest: 'Pose de repouso:',
+            set_rest_tip: 'Define a pose de repouso do esqueleto. Primeiro quadro do clipe: o primeiro quadro gravado. Pose estática: a opção "Static Pose" do visualizador 3D.',
+            opt_clip0: 'Primeiro quadro do clipe',
+            opt_static: 'Pose estática',
+        },
+        de: {
+            settings: 'Einstellungen',
+            sec_download: 'Herunterladen',
+            sec_animation: 'Animation',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'ZIP mit einer .glb-Datei und ihren Texturen herunterladen',
+            tip_fbx: 'ZIP mit einer binären .fbx-Datei (FBX 7.4) und ihren Texturen herunterladen',
+            btn_rec_single: 'EINEN CLIP AUFNEHMEN',
+            btn_rec_all: 'ALLE CLIPS AUFNEHMEN',
+            btn_stop: 'STOPP',
+            btn_cancel: 'ABBRECHEN',
+            btn_cancelling: 'WIRD ABGEBROCHEN...',
+            tip_no_clips: 'Dieses Modell hat keine Animationsclips',
+            tip_one_clip: 'Nur ein Clip: EINEN CLIP AUFNEHMEN verwenden (nimmt automatisch eine volle Schleife auf)',
+            tip_busy: 'Eine andere Aufgabe läuft: warten, bis sie fertig ist',
+            tip_busy_dl: 'Aufnahme oder Export läuft: warten, bis sie fertig sind',
+            st_idle: 'bereit',
+            st_rec: '● AUFN',
+            st_clips: '● CLIPS {p}',
+            st_line: '{state} · Objekte: {m} · Frames: {f} · Clips: {c}',
+            st_rec_clips: ' ({n} aufgenommen)',
+            st_no_anchors: '⚠ keine Verbindung zur 3D-Ansicht — Seite neu laden',
+            pr_recording: 'Aufnahme: {name}',
+            pr_recording_manual: 'Aufnahme (STOPP drücken zum Beenden)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: '{n} Frame aufgenommen', other: '{n} Frames aufgenommen' },
+            pr_recorded_clips: { one: '{n} Clip aufgenommen', other: '{n} Clips aufgenommen' },
+            pr_recording_failed: 'Aufnahme fehlgeschlagen',
+            pr_recording_cancelled: 'Aufnahme abgebrochen',
+            pr_done: 'Fertig',
+            pr_export_failed: 'Export fehlgeschlagen',
+            pr_see_console: 'Details in der Konsole',
+            stage_textures: 'Warten auf Texturen',
+            stage_merge: 'Texturen zusammenführen',
+            stage_build: 'Szene aufbauen',
+            stage_fbx: 'FBX-Datei schreiben',
+            stage_split: 'Metallic/Roughness-Maps trennen',
+            stage_zip: 'ZIP packen',
+            pr_no_textures: 'keine Texturen',
+            pr_all_captured: 'alle {n} erfasst',
+            pr_captured_wait: '{got}/{total} erfasst, warte bis zu {s} s',
+            pr_mr: 'Metallic/Roughness {d}/{n}',
+            pr_no_mr: 'keine Metallic/Roughness-Maps',
+            pr_op: 'Deckkraft {d}/{n}',
+            pr_no_op: 'keine Deckkraft-Maps',
+            pr_building: '3D-Objekte, Materialien und Clips aufbauen',
+            fbx_nodes: 'Knoten',
+            fbx_materials: 'Materialien',
+            fbx_geometry: 'Geometrie',
+            fbx_geometry_n: 'Geometrie {i}/{n}',
+            fbx_morph_targets: 'Shape Keys',
+            fbx_skins: 'Knochengewichte',
+            fbx_animation: 'Animation',
+            fbx_animation_n: 'Animation {i}/{n}',
+            fbx_compressing: 'Komprimieren',
+            fbx_writing_file: 'Datei schreiben',
+            fbx_done: 'fertig',
+            set_language: 'Sprache:',
+            set_language_tip: 'Sprache dieses Panels. Auto: die Sprache deines Browsers.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Max. Sekunden:',
+            set_max_seconds_tip: 'Beendet eine manuelle Aufnahme nach dieser Zeit. EINEN CLIP AUFNEHMEN und ALLE CLIPS AUFNEHMEN stoppen am Ende jedes Clips von selbst.',
+            set_fps: 'Aufnahme-FPS:',
+            set_fps_tip: 'Frames pro Sekunde in der Aufnahme. Max. nimmt jeden Frame auf, den die 3D-Ansicht zeichnet. Kleinere Werte ergeben kleinere Dateien.',
+            opt_fps_max: 'Max. (jeder Frame)',
+            set_reload: 'Automatisch neu laden:',
+            set_reload_tip: 'An: lädt die Seite einmal neu, wenn das Skript keine Verbindung zur 3D-Ansicht bekommt. Aus: kein Neuladen.',
+            set_double: 'Doppelseitig:',
+            set_double_tip: 'An: Materialien zeigen beide Seiten, wie in der 3D-Ansicht. Aus: Materialien zeigen nur die Vorderseite.',
+            set_single_auto: 'Einseitig wie in der 3D-Ansicht:',
+            set_single_auto_tip: 'An: ein Material, das die 3D-Ansicht einseitig zeigt, bleibt einseitig. Aus: die Einstellung Doppelseitig gilt für alle Materialien.',
+            set_slivers: 'Dünne Dreiecke entfernen (Streifen):',
+            set_slivers_tip: 'An: entfernt lange, dünne Dreiecke, die getrennte Teile eines Objekts verbinden und als Streifen sichtbar sind. Aus: behält alle Dreiecke.',
+            set_reduce: 'Keyframes reduzieren:',
+            set_reduce_tip: 'An: lässt Animationskeys weg, die sich schon aus den Keys davor und danach ergeben. Die Datei ist etwa halb so groß. Aus: behält jeden aufgenommenen Frame.',
+            set_still: 'Unbewegte Clips behalten:',
+            set_still_tip: 'An: ein Clip, in dem sich kein Knochen bewegt (ein Posen-Clip), wird als Pose des Skeletts exportiert. Aus: solche Clips kommen nicht in die Datei.',
+            set_vcolor: 'Vertexfarben sRGB>linear:',
+            set_vcolor_tip: 'An: wandelt Vertexfarben in lineare Farben um, wie glTF es verlangt. Die Farben sehen dann aus wie in der 3D-Ansicht. Aus: schreibt die Farben unverändert.',
+            set_flat_mr: 'Metallic/Roughness aus der 3D-Ansicht:',
+            set_flat_mr_tip: 'An: Materialien ohne Texturen bekommen Metallic und Roughness aus der 3D-Ansicht. Aus: Metallic 0, Roughness 0,5.',
+            set_scale: 'Export-Skalierung:',
+            set_scale_tip: 'Multipliziert die Größe des ganzen Modells. 0,01 für ein Modell in Zentimetern verwenden (Komma oder Punkt).',
+            set_mr_format: 'MR-Format:',
+            set_mr_format_tip: 'Dateiformat der zusammengeführten Metallic-Roughness-Texturen. JPEG: kleinere Dateien. PNG: kein Qualitätsverlust.',
+            opt_jpeg: 'JPEG (klein)',
+            opt_png: 'PNG (verlustfrei)',
+            set_rest: 'Ruhepose:',
+            set_rest_tip: 'Legt die Ruhepose des Skeletts fest. Erster Frame des Clips: der erste aufgenommene Frame. Statische Pose: der Eintrag „Static Pose“ der 3D-Ansicht.',
+            opt_clip0: 'Erster Frame des Clips',
+            opt_static: 'Statische Pose',
+        },
+        fr: {
+            settings: 'Paramètres',
+            sec_download: 'Télécharger',
+            sec_animation: 'Animation',
+            btn_glb: 'GLB',
+            btn_fbx: 'FBX',
+            tip_glb: 'Télécharger un ZIP avec un fichier .glb et ses textures',
+            tip_fbx: 'Télécharger un ZIP avec un fichier .fbx binaire (FBX 7.4) et ses textures',
+            btn_rec_single: 'ENREGISTRER UN CLIP',
+            btn_rec_all: 'ENREGISTRER TOUS LES CLIPS',
+            btn_stop: 'ARRÊTER',
+            btn_cancel: 'ANNULER',
+            btn_cancelling: 'ANNULATION...',
+            tip_no_clips: 'Aucun clip d’animation trouvé sur ce modèle',
+            tip_one_clip: 'Un seul clip : utilisez ENREGISTRER UN CLIP (enregistre automatiquement une boucle complète)',
+            tip_busy: 'Une autre tâche est en cours : attendez qu’elle se termine',
+            tip_busy_dl: 'Un enregistrement ou un export est en cours : attendez la fin',
+            st_idle: 'prêt',
+            st_rec: '● ENR',
+            st_clips: '● CLIPS {p}',
+            st_line: '{state} · objets : {m} · images : {f} · clips : {c}',
+            st_rec_clips: ' ({n} enregistrés)',
+            st_no_anchors: '⚠ pas de connexion à la visionneuse 3D — rechargez la page',
+            pr_recording: 'Enregistrement : {name}',
+            pr_recording_manual: 'Enregistrement (appuyez sur ARRÊTER pour finir)',
+            pr_seconds: '{t} / {d} s',
+            pr_recorded_frames: { one: '{n} image enregistrée', many: '{n} images enregistrées', other: '{n} images enregistrées' },
+            pr_recorded_clips: { one: '{n} clip enregistré', many: '{n} clips enregistrés', other: '{n} clips enregistrés' },
+            pr_recording_failed: 'L’enregistrement a échoué',
+            pr_recording_cancelled: 'Enregistrement annulé',
+            pr_done: 'Terminé',
+            pr_export_failed: 'L’export a échoué',
+            pr_see_console: 'détails dans la console',
+            stage_textures: 'Attente des textures',
+            stage_merge: 'Fusion des textures',
+            stage_build: 'Construction de la scène',
+            stage_fbx: 'Écriture du fichier FBX',
+            stage_split: 'Séparation des cartes métal/rugosité',
+            stage_zip: 'Création du ZIP',
+            pr_no_textures: 'aucune texture',
+            pr_all_captured: 'les {n} sont capturées',
+            pr_captured_wait: '{got}/{total} capturées, attente jusqu’à {s} s',
+            pr_mr: 'métal/rugosité {d}/{n}',
+            pr_no_mr: 'aucune carte métal/rugosité',
+            pr_op: 'opacité {d}/{n}',
+            pr_no_op: 'aucune carte d’opacité',
+            pr_building: 'construction des objets 3D, matériaux et clips',
+            fbx_nodes: 'nœuds',
+            fbx_materials: 'matériaux',
+            fbx_geometry: 'géométrie',
+            fbx_geometry_n: 'géométrie {i}/{n}',
+            fbx_morph_targets: 'clés de forme',
+            fbx_skins: 'poids des os',
+            fbx_animation: 'animation',
+            fbx_animation_n: 'animation {i}/{n}',
+            fbx_compressing: 'compression',
+            fbx_writing_file: 'écriture du fichier',
+            fbx_done: 'terminé',
+            set_language: 'Langue :',
+            set_language_tip: 'Langue de ce panneau. Auto : la langue de votre navigateur.',
+            opt_auto: 'Auto',
+            set_max_seconds: 'Secondes max. :',
+            set_max_seconds_tip: 'Arrête un enregistrement manuel après cette durée. ENREGISTRER UN CLIP et ENREGISTRER TOUS LES CLIPS s’arrêtent seuls à la fin de chaque clip.',
+            set_fps: 'IPS d’enregistrement :',
+            set_fps_tip: 'Images par seconde dans l’enregistrement. Max. enregistre chaque image dessinée par la visionneuse 3D. Des valeurs plus basses donnent des fichiers plus petits.',
+            opt_fps_max: 'Max. (chaque image)',
+            set_reload: 'Rechargement auto :',
+            set_reload_tip: 'Activé : recharge la page une fois si le script ne peut pas se connecter à la visionneuse 3D. Désactivé : pas de rechargement.',
+            set_double: 'Double face :',
+            set_double_tip: 'Activé : les matériaux montrent les deux faces, comme dans la visionneuse 3D. Désactivé : ils ne montrent que la face avant.',
+            set_single_auto: 'Simple face selon la visionneuse :',
+            set_single_auto_tip: 'Activé : un matériau que la visionneuse 3D affiche en simple face reste en simple face. Désactivé : le réglage Double face s’applique à tous les matériaux.',
+            set_slivers: 'Supprimer les triangles fins (rayures) :',
+            set_slivers_tip: 'Activé : supprime les longs triangles fins qui relient des parties séparées d’un objet et apparaissent comme des rayures. Désactivé : garde tous les triangles.',
+            set_reduce: 'Réduire les images clés :',
+            set_reduce_tip: 'Activé : omet les clés d’animation que les clés avant et après donnent déjà. Le fichier est environ deux fois plus petit. Désactivé : garde chaque image enregistrée.',
+            set_still: 'Garder les clips immobiles :',
+            set_still_tip: 'Activé : un clip où aucun os ne bouge (un clip de pose) est exporté comme une pose du squelette. Désactivé : ces clips ne sont pas mis dans le fichier.',
+            set_vcolor: 'Couleurs de sommets sRGB>linéaire :',
+            set_vcolor_tip: 'Activé : convertit les couleurs de sommets en couleurs linéaires, comme glTF l’exige. Les couleurs ressemblent alors à celles de la visionneuse 3D. Désactivé : écrit les couleurs sans changement.',
+            set_flat_mr: 'Métal/rugosité de la visionneuse :',
+            set_flat_mr_tip: 'Activé : les matériaux sans texture reprennent le métal et la rugosité de la visionneuse 3D. Désactivé : métal 0, rugosité 0,5.',
+            set_scale: 'Échelle d’export :',
+            set_scale_tip: 'Multiplie la taille du modèle entier. Utilisez 0,01 pour un modèle en centimètres (virgule ou point).',
+            set_mr_format: 'Format MR :',
+            set_mr_format_tip: 'Format de fichier des textures métal-rugosité fusionnées. JPEG : fichiers plus petits. PNG : sans perte de qualité.',
+            opt_jpeg: 'JPEG (petit)',
+            opt_png: 'PNG (sans perte)',
+            set_rest: 'Pose de repos :',
+            set_rest_tip: 'Définit la pose de repos du squelette. Première image du clip : la première image enregistrée. Pose statique : l’entrée « Static Pose » de la visionneuse 3D.',
+            opt_clip0: 'Première image du clip',
+            opt_static: 'Pose statique',
+        },
+        'zh-CN': {
+            settings: "设置",
+            sec_download: "下载",
+            sec_animation: "动画",
+            btn_glb: "GLB",
+            btn_fbx: "FBX",
+            tip_glb: "下载包含 .glb 文件及其纹理的 ZIP",
+            tip_fbx: "下载包含二进制 .fbx 文件（FBX 7.4）及其纹理的 ZIP",
+            btn_rec_single: "录制单个片段",
+            btn_rec_all: "录制所有片段",
+            btn_stop: "停止",
+            btn_cancel: "取消",
+            btn_cancelling: "正在取消...",
+            tip_no_clips: "此模型上未找到动画片段",
+            tip_one_clip: "只有一个片段：请使用“录制单个片段”（自动录制一个完整循环）",
+            tip_busy: "忙碌：请等待当前任务结束",
+            tip_busy_dl: "忙碌：请等待录制或导出结束",
+            st_idle: "空闲",
+            st_rec: "● 录制",
+            st_clips: "● 片段 {p}",
+            st_line: "{state} · 网格：{m} · 帧：{f} · 片段：{c}",
+            st_rec_clips: "（已录制 {n}）",
+            st_no_anchors: "⚠ 未连接到 3D 查看器 — 请刷新页面",
+            pr_recording: "正在录制 {name}",
+            pr_recording_manual: "正在录制（按“停止”结束）",
+            pr_seconds: "{t} / {d} 秒",
+            pr_recorded_frames: { other: "已录制 {n} 帧" },
+            pr_recorded_clips: { other: "已录制 {n} 个片段" },
+            pr_recording_failed: "录制失败",
+            pr_recording_cancelled: "录制已取消",
+            pr_done: "完成",
+            pr_export_failed: "导出失败",
+            pr_see_console: "详情请查看控制台",
+            stage_textures: "正在等待纹理",
+            stage_merge: "正在合并纹理",
+            stage_build: "正在构建场景",
+            stage_fbx: "正在写入 FBX",
+            stage_split: "正在拆分金属/粗糙度贴图",
+            stage_zip: "正在打包 ZIP",
+            pr_no_textures: "无纹理",
+            pr_all_captured: "全部 {n} 个已捕获",
+            pr_captured_wait: "已捕获 {got}/{total}，最多等待 {s} 秒",
+            pr_mr: "金属/粗糙度 {d}/{n}",
+            pr_no_mr: "无金属/粗糙度贴图",
+            pr_op: "不透明度 {d}/{n}",
+            pr_no_op: "无不透明度贴图",
+            pr_building: "正在构建网格、材质和片段",
+            fbx_nodes: "节点",
+            fbx_materials: "材质",
+            fbx_geometry: "几何体",
+            fbx_geometry_n: "几何体 {i}/{n}",
+            fbx_morph_targets: "形态键",
+            fbx_skins: "骨骼权重",
+            fbx_animation: "动画",
+            fbx_animation_n: "动画 {i}/{n}",
+            fbx_compressing: "正在压缩",
+            fbx_writing_file: "正在写入文件",
+            fbx_done: "完成",
+            set_language: "语言：",
+            set_language_tip: "此面板的语言。自动：浏览器的语言。",
+            opt_auto: "自动",
+            set_max_seconds: "最大秒数：",
+            set_max_seconds_tip: "手动录制在此时间后停止。“录制单个片段”和“录制所有片段”会在每个片段结束时自动停止。",
+            set_fps: "录制 FPS：",
+            set_fps_tip: "录制时的每秒帧数。“最大”会记录 3D 查看器绘制的每一帧。较低的值会生成更小的文件。",
+            opt_fps_max: "最大（每一帧）",
+            set_reload: "自动重新加载：",
+            set_reload_tip: "开：如果脚本无法连接到 3D 查看器，则重新加载页面一次。关：不重新加载。",
+            set_double: "双面：",
+            set_double_tip: "开：材质显示双面，与 3D 查看器一致。关：材质仅显示正面。",
+            set_single_auto: "单面跟随 3D 查看器：",
+            set_single_auto_tip: "开：3D 查看器显示为单面的材质保持单面。关：“双面”设置应用于所有材质。",
+            set_slivers: "移除细长三角形（条纹）：",
+            set_slivers_tip: "开：移除连接物体不同部分、看起来像条纹的细长三角形。关：保留所有三角形。",
+            set_reduce: "减少关键帧：",
+            set_reduce_tip: "开：省略前后关键帧已能确定其值的动画关键帧。文件约缩小一半。关：保留每个录制帧。",
+            set_still: "保留静止片段：",
+            set_still_tip: "开：没有任何关节移动的片段（姿态片段）会作为骨骼姿态导出。关：此类片段不会写入文件。",
+            set_vcolor: "顶点颜色 sRGB>线性：",
+            set_vcolor_tip: "开：按 glTF 要求将顶点颜色转换为线性颜色。颜色随后会与 3D 查看器中一致。关：颜色保持不变写入。",
+            set_flat_mr: "使用 3D 查看器的金属度/粗糙度：",
+            set_flat_mr_tip: "开：无纹理材质使用 3D 查看器的金属度和粗糙度。关：金属度 0，粗糙度 0.5。",
+            set_scale: "导出缩放：",
+            set_scale_tip: "乘以整个模型的大小。模型以厘米为单位时使用 0.01（可用逗号或小数点）。",
+            set_mr_format: "MR 格式：",
+            set_mr_format_tip: "合并后的金属-粗糙度纹理的文件格式。JPEG：文件更小。PNG：无质量损失。",
+            opt_jpeg: "JPEG（小）",
+            opt_png: "PNG（无损）",
+            set_rest: "静止姿态：",
+            set_rest_tip: "设置骨骼的静止姿态。片段首帧：第一个录制帧。静态姿态：3D 查看器中的“Static Pose”。",
+            opt_clip0: "片段首帧",
+            opt_static: "静态姿态",
+        },
+    };
+    // @i18n-end
+    // Names of the languages, each in its own language (not translated).
+    const LANG_NAMES = { en: 'English', pl: 'Polski', ru: 'Русский', ja: '日本語', ko: '한국어', es: 'Español', 'pt-BR': 'Português (Brasil)', de: 'Deutsch', fr: 'Français', 'zh-CN': '简体中文' };
+
+    function uiLang() {
+        const c = CONFIG.LANGUAGE;
+        if (c && c !== 'auto' && STRINGS[c]) return c;
+        // case-insensitive: the browser says "zh-cn" or "zh-CN", the table uses "zh-CN";
+        // then the base language ("pt-PT" -> "pt-BR", "de-AT" -> "de")
+        const keys = Object.keys(STRINGS);
+        const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
+        for (const l of list) {
+            const lc = String(l).toLowerCase(), base = lc.split('-')[0];
+            const hit = keys.find((k) => k.toLowerCase() === lc) || keys.find((k) => k.toLowerCase().split('-')[0] === base);
+            if (hit) return hit;
+        }
+        return 'en';
+    }
+    function fillVars(s, vars) {
+        return String(s).replace(/\{(\w+)\}/g, (m, k) => (vars && vars[k] !== undefined ? String(vars[k]) : m));
+    }
+    function lookup(key) {
+        const lang = uiLang();
+        let s = STRINGS[lang] && STRINGS[lang][key];
+        if (s === undefined) s = STRINGS.en[key];
+        if (s === undefined) { warn(`i18n: missing key ${key}`); s = key; }
+        return { s, lang };
+    }
+    function i18n(key, vars) {
+        const { s } = lookup(key);
+        return fillVars(typeof s === 'object' ? (s.other || s.one) : s, vars);
+    }
+    function i18nN(key, n, vars) {
+        const { s, lang } = lookup(key);
+        if (typeof s !== 'object') return fillVars(s, Object.assign({ n }, vars));
+        let form = 'other';
+        try { form = new Intl.PluralRules(lang).select(n); } catch (e) { form = n === 1 ? 'one' : 'other'; }
+        return fillVars(s[form] || s.other || s.one, Object.assign({ n }, vars));
+    }
+
 
     // Z-up -> Y-up. Maps (x, y, z) -> (x, z, -y).
     const YUP = [
@@ -912,27 +1911,27 @@
             log(`single-clip record: discarded ${window.clips.length} stored multi-clip recording(s)`);
         }
         window.clips = [];
-        setRecLabel('STOP');
+        setRecLabel(i18n('btn_stop'));
         const base = inst.start || 0;
         log(`auto record: one full loop of the active clip (${def.duration.toFixed(2)}s)`);
-        progStage(1, 1, `Recording ${def.name}`);
+        progStage(1, 1, i18n('pr_recording', { name: def.name }));
         try { mgr.setSeekTime(base); } catch (e) {
             err('auto record seek', e.message);
-            window.animationRecording = false; window.autoRecordActive = false; setRecLabel('RECORD SINGLE CLIP');
+            window.animationRecording = false; window.autoRecordActive = false; setRecLabel(i18n('btn_rec_single'));
             return false;
         }
         function done(frames) {
             window.animationRecording = false;
             window.autoRecordActive = false;
             window.clipCancel = false;
-            setRecLabel('RECORD SINGLE CLIP');
+            setRecLabel(i18n('btn_rec_single'));
             if (frames && frames.length > 1) {
                 window.recordedFrames = frames;
                 log('recording stopped, frames:', frames.length);
-                progDone(`Recorded ${frames.length} frames`);
+                progDone(i18nN('pr_recorded_frames', frames.length));
             } else {
                 warn('auto record produced no frames');
-                progDone('Recording failed', true);
+                progDone(i18n('pr_recording_failed'), true);
             }
         }
         waitFrames(CONFIG.CLIP_SETTLE_FRAMES, () => {
@@ -954,13 +1953,13 @@
         }
         window.clips = [];
         window.recordingStartTime = performance.now() / 1000;
-        setRecLabel('STOP');
+        setRecLabel(i18n('btn_stop'));
         log(`recording started (max ${CONFIG.MAX_RECORD_SECONDS}s)`);
-        progStage(1, 1, 'Recording (press STOP to end)');
+        progStage(1, 1, i18n('pr_recording_manual'));
         function tick() {
             if (!window.animationRecording) return;
             const t = performance.now() / 1000 - window.recordingStartTime;
-            progSub(t / CONFIG.MAX_RECORD_SECONDS, `${t.toFixed(1)} / ${CONFIG.MAX_RECORD_SECONDS} s`);
+            progSub(t / CONFIG.MAX_RECORD_SECONDS, i18n('pr_seconds', { t: t.toFixed(1), d: CONFIG.MAX_RECORD_SECONDS }));
             const rf = window.recordedFrames;
             if (fpsDue(t, rf.length ? rf[rf.length - 1].time : -1)) {
                 rf.push({ time: t, meshes: snapshotFrame().meshes });
@@ -976,9 +1975,9 @@
         if (window.autoRecordActive) { window.clipCancel = true; return; }
         window.animationRecording = false;
         cancelAnimationFrame(window.recordingRafId);
-        setRecLabel('RECORD SINGLE CLIP');
+        setRecLabel(i18n('btn_rec_single'));
         log('recording stopped, frames:', window.recordedFrames.length);
-        progDone(`Recorded ${window.recordedFrames.length} frames`);
+        progDone(i18nN('pr_recorded_frames', window.recordedFrames.length));
     }
 
     function setRecLabel(text) {
@@ -1014,7 +2013,7 @@
         box.classList.toggle('rp-err', !!isErr);
         document.getElementById('rp-stage-fill').style.width = '100%';
         document.getElementById('rp-stage-label').textContent = label;
-        progSub(isErr ? 1 : 1, isErr ? 'see the console for details' : '');
+        progSub(1, isErr ? i18n('pr_see_console') : '');
         clearTimeout(_progHideTimer);
         _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
     }
@@ -1188,7 +2187,7 @@
             if (window.clipCancel) { finish('cancelled'); return; }
             const t = clockNow();
             if (t >= def.duration) { finish(null); return; }
-            progSub(t / def.duration, `${t.toFixed(1)} / ${def.duration.toFixed(1)} s`);
+            progSub(t / def.duration, i18n('pr_seconds', { t: t.toFixed(1), d: def.duration.toFixed(1) }));
             const act = activeClipUids(mgr);
             if (act.length !== 1 || act[0] !== def.uid) {
                 // "Play all" advances to the next clip as this one ends, and the sim
@@ -1292,8 +2291,8 @@
             window.clipRecording = false;
             window.clipCancel = false;
             window.clipProgress = '';
-            setRecAllLabel('RECORD ALL CLIPS');
-            progDone(window.clipCancel ? 'Recording cancelled' : `Recorded ${window.clips.length} clip(s)`, !!window.clipCancel);
+            setRecAllLabel(i18n('btn_rec_all'));
+            progDone(window.clipCancel ? i18n('pr_recording_cancelled') : i18nN('pr_recorded_clips', window.clips.length), !!window.clipCancel);
             log(`record-all finished, clips recorded: ${window.clips.length}`);
         }
         try {
@@ -1320,7 +2319,7 @@
         window.clips = [];
         window.recordedFrames = [];   // a stale single recording must not win over the new clips
         window.clipCancel = false;
-        setRecAllLabel('CANCEL');
+        setRecAllLabel(i18n('btn_cancel'));
         const wasPaused = mgr._pause;
         log('record-all started, clips in manager: ' + getClipCount() +
             ', fps ' + (+CONFIG.RECORD_FPS > 0 ? CONFIG.RECORD_FPS : 'every frame') + ' (keep this tab visible: a hidden tab pauses rendering and frames are skipped)');
@@ -1342,7 +2341,7 @@
                 }
                 const d = defs[i++];
                 window.clipProgress = `${i}/${defs.length}`;
-                progStage(i, defs.length, `Recording ${d.name}`);
+                progStage(i, defs.length, i18n('pr_recording', { name: d.name }));
                 try {
                 recordClip(mgr, d, (frames) => {
                     if (window.clipCancel) {
@@ -1378,7 +2377,18 @@
         }
     });
 
-    function addbtnfunc() {
+    // Builds the panel again (after a language change), at the same place.
+    let _panelTimers = [];
+    function rebuildPanel(keepOpen) {
+        const old = document.getElementById('ripper-panel');
+        const pos = old ? { left: old.style.left, top: old.style.top, right: old.style.right } : null;
+        _panelTimers.forEach(clearInterval); _panelTimers = [];
+        if (old) old.remove();
+        button_dw = false;
+        addbtnfunc(true, keepOpen, pos);
+    }
+
+    function addbtnfunc(rebuilt, keepOpen, keepPos) {
         if (button_dw) return;
         if (!document.body) { setTimeout(addbtnfunc, 500); return; }
         if (document.getElementById('ripper-panel')) { button_dw = true; return; }
@@ -1404,8 +2414,7 @@
                 '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
                 '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
                 '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
-                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;white-space:nowrap;overflow:hidden}',
-                '#ripper-progress .rp-lab span:first-child{overflow:hidden;text-overflow:ellipsis}',
+                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;overflow-wrap:anywhere}',
                 '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
                 '#ripper-progress .rp-bar.rp-thin{height:4px}',
                 '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
@@ -1414,6 +2423,9 @@
                 '@keyframes rp-stripe{to{background-position:22px 0}}',
                 '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
                 '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
+                '#ripper-panel.rp-wide{width:270px}',
+                '#ripper-config>div>span{flex:1;min-width:0}',
+                '#ripper-config select{max-width:55%}',
                 '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
             ].join('');
             document.head.appendChild(css);
@@ -1426,13 +2438,13 @@
         titleRow.className = 'rp-head';
 
         const title = document.createElement('div');
-        title.textContent = 'MODEL RIPPER';
+        title.textContent = 'MODEL RIPPER';   // i18n-ok (name of the script)
         title.className = 'rp-title';
         titleRow.appendChild(title);
 
         const gear = document.createElement('span');
         gear.textContent = '⚙';
-        gear.title = 'Settings';
+        gear.title = i18n('settings');
         gear.className = 'rp-gear';
         titleRow.appendChild(gear);
 
@@ -1453,27 +2465,27 @@
             return b;
         }
 
-        section('Download');
+        section(i18n('sec_download'));
         const dlRow = document.createElement('div');
         dlRow.className = 'rp-row';
-        const btnDL = button('dlGlbBtn', 'GLB', 'rp-dl', () => { downloadGLB('glb'); });
-        btnDL.title = 'Download a ZIP with a .glb file and its textures';
-        const btnFBX = button('dlFbxBtn', 'FBX', 'rp-dl', () => { downloadGLB('fbx'); });
-        btnFBX.title = 'Download a ZIP with a binary .fbx file (FBX 7.4) and its textures';
+        const btnDL = button('dlGlbBtn', i18n('btn_glb'), 'rp-dl', () => { downloadGLB('glb'); });
+        btnDL.title = i18n('tip_glb');
+        const btnFBX = button('dlFbxBtn', i18n('btn_fbx'), 'rp-dl', () => { downloadGLB('fbx'); });
+        btnFBX.title = i18n('tip_fbx');
         dlRow.appendChild(btnDL);
         dlRow.appendChild(btnFBX);
         panel.appendChild(dlRow);
 
-        section('Animation');
-        const btnRec = button('recBtnLabel', 'RECORD SINGLE CLIP', 'rp-rec', () => {
+        section(i18n('sec_animation'));
+        const btnRec = button('recBtnLabel', window.animationRecording ? i18n('btn_stop') : i18n('btn_rec_single'), 'rp-rec', () => {
             if (!window.animationRecording) startRecording(); else stopRecording();
         });
         panel.appendChild(btnRec);
 
-        const btnAll = button('recAllBtn', 'RECORD ALL CLIPS', 'rp-rec', () => {
+        const btnAll = button('recAllBtn', window.clipRecording ? i18n('btn_cancel') : i18n('btn_rec_all'), 'rp-rec', () => {
             if (window.clipRecording) {
                 window.clipCancel = true;
-                setRecAllLabel('CANCELLING...');
+                setRecAllLabel(i18n('btn_cancelling'));
                 log('record-all: cancel requested');
                 return;
             }
@@ -1502,17 +2514,17 @@
             const recBusy = window.animationRecording || window.clipRecording;
             btnRec.classList.toggle('rp-on', !!window.animationRecording);
             btnAll.classList.toggle('rp-on', !!window.clipRecording);
-            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? 'No animation clips found on this model' : 'Busy: wait for the current job to end');
-            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? 'Only one clip: use RECORD SINGLE CLIP (records one full loop automatically)' : n < 1 ? 'No animation clips found on this model' : 'Busy: wait for the current job to end');
-            setOff(btnDL, recBusy || _exporting, 'Busy: wait for the recording or export to end');
-            setOff(btnFBX, recBusy || _exporting, 'Busy: wait for the recording or export to end');
+            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? i18n('tip_one_clip') : n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            setOff(btnDL, recBusy || _exporting, i18n('tip_busy_dl'));
+            setOff(btnFBX, recBusy || _exporting, i18n('tip_busy_dl'));
         }
         refreshAllBtn();
-        setInterval(refreshAllBtn, 500);
+        _panelTimers.push(setInterval(refreshAllBtn, 500));
 
         const status = document.createElement('div');
         status.id = 'ripper-status';
-        status.textContent = 'idle';
+        status.textContent = i18n('st_idle');
         panel.appendChild(status);
 
         // ---- config form (hidden until gear clicked) ----
@@ -1520,11 +2532,34 @@
         configDiv.id = 'ripper-config';
         configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
 
+        const rowL = document.createElement('div');
+        rowL.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const labelL = document.createElement('span');
+        labelL.textContent = i18n('set_language');
+        labelL.title = i18n('set_language_tip');
+        rowL.appendChild(labelL);
+        const selL = document.createElement('select');
+        selL.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])).forEach((o) => {
+            const op = document.createElement('option');
+            op.value = o[0]; op.textContent = o[1];
+            if ((CONFIG.LANGUAGE || 'auto') === o[0]) op.selected = true;
+            selL.appendChild(op);
+        });
+        selL.addEventListener('change', () => {
+            CONFIG.LANGUAGE = selL.value;
+            saveConfig();
+            log(`language set to ${selL.value} (${uiLang()})`);
+            rebuildPanel(true);
+        });
+        rowL.appendChild(selL);
+        configDiv.appendChild(rowL);
+
         const row1 = document.createElement('div');
         row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label1 = document.createElement('span');
-        label1.textContent = 'Max seconds:';
-        label1.title = 'Stops a manual recording after this time. RECORD and RECORD ALL CLIPS stop by themselves at the end of each clip.';
+        label1.textContent = i18n('set_max_seconds');
+        label1.title = i18n('set_max_seconds_tip');
         row1.appendChild(label1);
         const input1 = document.createElement('input');
         input1.type = 'number';
@@ -1546,12 +2581,12 @@
         const rowF = document.createElement('div');
         rowF.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const labelF = document.createElement('span');
-        labelF.textContent = 'Record FPS:';
-        labelF.title = 'Frames per second in the recording. Max records every frame the viewer draws. Lower values make smaller files.';
+        labelF.textContent = i18n('set_fps');
+        labelF.title = i18n('set_fps_tip');
         rowF.appendChild(labelF);
         const selF = document.createElement('select');
         selF.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [[0, 'Max (every frame)'], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
+        [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
             const op = document.createElement('option');
             op.value = String(o[0]); op.textContent = o[1];
             if ((+CONFIG.RECORD_FPS || 0) === o[0]) op.selected = true;
@@ -1568,8 +2603,8 @@
         const row2 = document.createElement('div');
         row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label2 = document.createElement('span');
-        label2.textContent = 'Auto-reload:';
-        label2.title = 'On: reloads the page one time if the script cannot connect to the viewer. Off: no reload.';
+        label2.textContent = i18n('set_reload');
+        label2.title = i18n('set_reload_tip');
         row2.appendChild(label2);
         const check2 = document.createElement('input');
         check2.type = 'checkbox';
@@ -1584,8 +2619,8 @@
         const row5 = document.createElement('div');
         row5.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label5 = document.createElement('span');
-        label5.textContent = 'Double sided:';
-        label5.title = 'On: materials show both sides, as in the viewer. Off: materials show the front side only.';
+        label5.textContent = i18n('set_double');
+        label5.title = i18n('set_double_tip');
         row5.appendChild(label5);
         const check5 = document.createElement('input');
         check5.type = 'checkbox';
@@ -1601,8 +2636,8 @@
         const row5b = document.createElement('div');
         row5b.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label5b = document.createElement('span');
-        label5b.textContent = 'Auto single sided (viewer flag):';
-        label5b.title = 'On: a material that the viewer shows single sided stays single sided. Off: the Double sided setting applies to all materials.';
+        label5b.textContent = i18n('set_single_auto');
+        label5b.title = i18n('set_single_auto_tip');
         row5b.appendChild(label5b);
         const check5b = document.createElement('input');
         check5b.type = 'checkbox';
@@ -1618,8 +2653,8 @@
         const row5c = document.createElement('div');
         row5c.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label5c = document.createElement('span');
-        label5c.textContent = 'Drop strip slivers (stripes):';
-        label5c.title = 'On: removes long thin triangles that connect separate parts of a mesh. Off: keeps all triangles.';
+        label5c.textContent = i18n('set_slivers');
+        label5c.title = i18n('set_slivers_tip');
         row5c.appendChild(label5c);
         const check5c = document.createElement('input');
         check5c.type = 'checkbox';
@@ -1635,8 +2670,8 @@
         const row5d = document.createElement('div');
         row5d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label5d = document.createElement('span');
-        label5d.textContent = 'Reduce keyframes:';
-        label5d.title = 'On: leaves out animation keys that the keys before and after them already give. The file is about half as large. Off: keeps every recorded frame.';
+        label5d.textContent = i18n('set_reduce');
+        label5d.title = i18n('set_reduce_tip');
         row5d.appendChild(label5d);
         const check5d = document.createElement('input');
         check5d.type = 'checkbox';
@@ -1652,8 +2687,8 @@
         const row5e = document.createElement('div');
         row5e.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label5e = document.createElement('span');
-        label5e.textContent = 'Keep still clips:';
-        label5e.title = 'On: a clip in which no joint moves (a pose clip) is exported as a pose of the skeleton. Off: such clips are left out of the file.';
+        label5e.textContent = i18n('set_still');
+        label5e.title = i18n('set_still_tip');
         row5e.appendChild(label5e);
         const check5e = document.createElement('input');
         check5e.type = 'checkbox';
@@ -1669,8 +2704,8 @@
         const row6 = document.createElement('div');
         row6.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label6 = document.createElement('span');
-        label6.textContent = 'Vertex color sRGB>linear:';
-        label6.title = 'On: converts vertex colors to linear color, as glTF requires. The colors then look as in the viewer. Off: writes the colors unchanged.';
+        label6.textContent = i18n('set_vcolor');
+        label6.title = i18n('set_vcolor_tip');
         row6.appendChild(label6);
         const check6 = document.createElement('input');
         check6.type = 'checkbox';
@@ -1686,8 +2721,8 @@
         const row7 = document.createElement('div');
         row7.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label7 = document.createElement('span');
-        label7.textContent = 'Flat metal/rough from viewer:';
-        label7.title = 'On: materials without textures use the metalness and roughness of the viewer. Off: metalness 0, roughness 0.5.';
+        label7.textContent = i18n('set_flat_mr');
+        label7.title = i18n('set_flat_mr_tip');
         row7.appendChild(label7);
         const check7 = document.createElement('input');
         check7.type = 'checkbox';
@@ -1703,19 +2738,21 @@
         const row8 = document.createElement('div');
         row8.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label8 = document.createElement('span');
-        label8.textContent = 'Export scale:';
-        label8.title = 'Multiplies the size of the whole model. Use 0.01 for a model in centimeters.';
+        label8.textContent = i18n('set_scale');
+        label8.title = i18n('set_scale_tip');
         row8.appendChild(label8);
         const input8 = document.createElement('input');
-        input8.type = 'number';
-        input8.step = 'any';
-        input8.min = '0.0001';
-        input8.value = CONFIG.EXPORT_SCALE;
+        // text, not type=number: a number field rejects "0,01" in some browsers and languages
+        input8.type = 'text';
+        input8.inputMode = 'decimal';
+        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
+        const showNum = (v) => String(v).replace('.', decSep);
+        input8.value = showNum(CONFIG.EXPORT_SCALE);
         input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
         input8.addEventListener('change', () => {
-            let v = parseFloat(input8.value);
+            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
             if (isNaN(v) || v <= 0) v = 1;
-            input8.value = v;
+            input8.value = showNum(v);
             CONFIG.EXPORT_SCALE = v;
             saveConfig();
             log(`export scale set to ${v}`);
@@ -1726,12 +2763,12 @@
         const row3 = document.createElement('div');
         row3.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label3 = document.createElement('span');
-        label3.textContent = 'MR format:';
-        label3.title = 'File format of the merged metallic-roughness textures. JPEG: smaller files. PNG: no quality loss.';
+        label3.textContent = i18n('set_mr_format');
+        label3.title = i18n('set_mr_format_tip');
         row3.appendChild(label3);
         const sel3 = document.createElement('select');
         sel3.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['jpeg','JPEG (small)'], ['png','PNG (lossless)']].forEach((opt) => {
+        [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]].forEach((opt) => {
             const o = document.createElement('option');
             o.value = opt[0];
             o.textContent = opt[1];
@@ -1748,12 +2785,12 @@
         const row4 = document.createElement('div');
         row4.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
         const label4 = document.createElement('span');
-        label4.textContent = 'Rest pose:';
-        label4.title = 'Sets the rest pose of the skeleton. Clip 1st frame: the first recorded frame. Static Pose: the Static Pose of the viewer.';
+        label4.textContent = i18n('set_rest');
+        label4.title = i18n('set_rest_tip');
         row4.appendChild(label4);
         const sel4 = document.createElement('select');
         sel4.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['clip0','Clip 1st frame'], ['static','Static Pose']].forEach((opt) => {
+        [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]].forEach((opt) => {
             const o = document.createElement('option');
             o.value = opt[0];
             o.textContent = opt[1];
@@ -1770,13 +2807,19 @@
 
         panel.appendChild(configDiv);
 
+        // The settings need more room (longer labels in some languages): the panel gets wider while they are open.
         gear.addEventListener('click', () => {
-            configDiv.style.display = configDiv.style.display === 'none' ? 'flex' : 'none';
+            const open = configDiv.style.display === 'none';
+            configDiv.style.display = open ? 'flex' : 'none';
+            panel.classList.toggle('rp-wide', open);
         });
+        if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
+        if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
 
         document.body.appendChild(panel);
         button_dw = true;
-        log('panel added');
+        log(`panel added (language ${uiLang()})`);
+        if (rebuilt) return;   // the checks below run once per page
 
         // Warn if the bad bundle was served. After 8s, show hint. After
         // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
@@ -1784,7 +2827,7 @@
             if (window._anyAnchorsMatched) return;
             const s = document.getElementById('ripper-status');
             if (s) {
-                s.textContent = '⚠ no anchors — reload page';
+                s.textContent = i18n('st_no_anchors');
                 s.style.color = '#f80';
             }
             log('no anchors matched after 8s; bundle is the incompatible build');
@@ -1804,14 +2847,11 @@
         setInterval(() => {
             const s = document.getElementById('ripper-status');
             if (!s) return;
-            const m = window.allmodel.length;
-            const f = window.recordedFrames.length;
+            if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
             const busy = window.animationRecording || window.clipRecording;
-            s.textContent = (window.animationRecording ? '● REC'
-                          : (window.clipRecording ? `● CLIPS ${window.clipProgress}` : 'idle'))
-                          + ' · meshes:' + m + ' frames:' + f
-                          + ' · clips:' + getClipCount()
-                          + (window.clips.length ? ` (rec ${window.clips.length})` : '');
+            const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
+            s.textContent = i18n('st_line', { state, m: window.allmodel.length, f: window.recordedFrames.length, c: getClipCount() })
+                          + (window.clips.length ? i18n('st_rec_clips', { n: window.clips.length }) : '');
             s.style.color = busy ? '#f28b82' : '#9aa0a6';
         }, 500);
 
@@ -2212,31 +3252,31 @@
         _exporting = true;
         log(`export started (${format.toUpperCase()})`);
         const stages = format === 'fbx'
-            ? ['Waiting for textures', 'Merging textures', 'Building scene', 'Writing FBX', 'Splitting metal/rough maps', 'Packing ZIP']
-            : ['Waiting for textures', 'Merging textures', 'Building scene', 'Packing ZIP'];
-        const stage = (k) => progStage(k + 1, stages.length, stages[k]);
+            ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
+            : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
+        const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
         stage(0);
         waitForTextures((got, total, left) => {
-            if (!total) progSub(1, 'no textures');
-            else if (got >= total) progSub(1, `all ${total} captured`);
-            else progSub(got / total, `${got}/${total} captured, waiting up to ${Math.ceil(left)} s`);
+            if (!total) progSub(1, i18n('pr_no_textures'));
+            else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
+            else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
         })
             .then(() => {
                 stage(1);
                 // two parts: metal/rough maps, then opacity into base colour alpha
-                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? `metal/rough ${d}/${n}` : 'no metal/rough maps'), format === 'fbx');
+                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? i18n('pr_mr', { d, n }) : i18n('pr_no_mr')), format === 'fbx');
             })
-            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? `opacity ${d}/${n}` : 'no opacity maps')))
-            .then(() => { stage(2); progSub(-1, 'building meshes, materials and clips'); return nextPaint(); })
+            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? i18n('pr_op', { d, n }) : i18n('pr_no_op'))))
+            .then(() => { stage(2); progSub(-1, i18n('pr_building')); return nextPaint(); })
             .then(() => {
                 const built = _downloadGLBSync();
                 if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
                 return exportFBX(built, stage);
             })
-            .then(() => { _exporting = false; progDone('Done'); })
+            .then(() => { _exporting = false; progDone(i18n('pr_done')); })
             .catch((e) => {
                 _exporting = false;
-                progDone('Export failed', true);
+                progDone(i18n('pr_export_failed'), true);
                 err('export failed:', e.message, e.stack);
             });
     }
@@ -2283,6 +3323,14 @@
         });
     }
 
+    // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
+    function fbxLabel(label) {
+        const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
+        if (!m) return label;
+        const key = 'fbx_' + m[1].replace(/ /g, '_') + (m[2] ? '_n' : '');
+        return (STRINGS.en[key] !== undefined) ? i18n(key, { i: m[2], n: m[3] }) : label;
+    }
+
     function exportFBX(built, stage) {
         stage(3);
         const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
@@ -2290,7 +3338,7 @@
             creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
             fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
             deflate: zlibDeflate,
-            onProgress: (f, label) => progSub(f, label),
+            onProgress: (f, label) => progSub(f, fbxLabel(label)),
         }).then((res) => {
             res.warnings.forEach((w) => warn('fbx: ' + w));
             const st = res.stats;

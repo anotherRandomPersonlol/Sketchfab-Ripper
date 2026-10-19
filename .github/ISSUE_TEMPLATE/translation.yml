@@ -1,0 +1,49 @@
+name: Translation problem
+description: A text in the panel is wrong, unclear or still in English in your language.
+title: "[Translation] <language>: <short description>"
+labels: ["translation"]
+body:
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - Polski (pl)
+        - Русский (ru)
+        - 日本語 (ja)
+        - 한국어 (ko)
+        - Español (es)
+        - Português (Brasil) (pt-BR)
+        - Deutsch (de)
+        - Français (fr)
+        - 简体中文 (zh-CN)
+        - Other (write it below)
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where the text is
+      description: For example the button, the setting name, the tooltip of a setting, or the progress bar.
+      placeholder: Tooltip of "Reduce keyframes"
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: Text now
+      description: Copy the text exactly as the panel shows it.
+    validations:
+      required: true
+  - type: textarea
+    id: better
+    attributes:
+      label: Better text
+      description: Write the text that you suggest. Keep the parts in curly brackets, for example {n} or {name}, as they are.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why (optional)
+      description: For example "wrong meaning", "sounds unnatural", or "the button text does not fit".
