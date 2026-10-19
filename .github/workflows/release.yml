@@ -1,0 +1,65 @@
+# Creates a GitHub release when the @version in the userscript changes on main.
+# The release text is the matching "## vX.Y.Z" section of CHANGELOG.md.
+# Run it by hand (Actions > Release > Run workflow) for a version that is
+# already on main but has no release yet.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/Sketchfab-ripper.user.js
+      - CHANGELOG.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: ver
+        run: |
+          v=$(grep -m1 -E '^// @version' src/Sketchfab-ripper.user.js | awk '{print $3}')
+          if [ -z "$v" ]; then echo "No @version line found"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+      - name: Stop if the release exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" >/dev/null 2>&1; then
+            echo "Release v${{ steps.ver.outputs.version }} already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get the changelog section
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          awk -v want="## v${{ steps.ver.outputs.version }}" '
+            $0 == want { on = 1; next }
+            on && /^## v/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no '## v${{ steps.ver.outputs.version }}' section. Add it, then push again."
+            exit 1
+          fi
+          cat notes.md
+
+      - name: Create the release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --title "v${{ steps.ver.outputs.version }}" \
+            --notes-file notes.md \
+            src/Sketchfab-ripper.user.js
