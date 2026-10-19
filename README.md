@@ -20,7 +20,7 @@ Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the
 - Single-sided and double-sided materials, the same as in the viewer.
 - Bones with non-uniform scale and shear, exported without data loss.
 - Progress bars for recording and export: the current stage and the progress in that stage.
-- The panel in English, Polish, Russian, Japanese, Korean, Spanish, Portuguese (Brazil), German and French. If a text is wrong in your language, [report it](https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/issues/new?template=translation.yml).
+- The panel in English, Polish, Russian, Japanese, Korean, Spanish, Portuguese (Brazil), German, French and Simplified Chinese. If a text is wrong in your language, [report it](https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/issues/new?template=translation.yml).
 - A settings panel (gear icon) that keeps your settings.
 
 ## Requirements

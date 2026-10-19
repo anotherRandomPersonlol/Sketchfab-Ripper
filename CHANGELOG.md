@@ -3,7 +3,7 @@
 ## v1.6.0
 
 ### New
-- The panel is translated: English, Polish, Russian, Japanese, Korean, Spanish, Portuguese (Brazil), German and French. It uses the language of your browser. The new **Language** setting changes it. The console log stays in English.
+- The panel is translated: English, Polish, Russian, Japanese, Korean, Spanish, Portuguese (Brazil), German, French and Simplified Chinese. It uses the language of your browser. The new **Language** setting changes it. The console log stays in English.
 - Greasy Fork shows the script in the search of these languages (localized name and description).
 - Issue form for translation problems.
 
