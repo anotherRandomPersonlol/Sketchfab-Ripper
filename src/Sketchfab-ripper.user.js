@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.4.0
-// @description  Download Sketchfab models as GLB: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
+// @version      1.5.0
+// @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @author       anotherRandomPersonlol
 // @license      MIT
 // @icon         https://raw.githubusercontent.com/anotherRandomPersonlol/Sketchfab-Ripper/main/docs/icon64.png
@@ -915,21 +915,24 @@
         setRecLabel('STOP');
         const base = inst.start || 0;
         log(`auto record: one full loop of the active clip (${def.duration.toFixed(2)}s)`);
+        progStage(1, 1, `Recording ${def.name}`);
         try { mgr.setSeekTime(base); } catch (e) {
             err('auto record seek', e.message);
-            window.animationRecording = false; window.autoRecordActive = false; setRecLabel('RECORD');
+            window.animationRecording = false; window.autoRecordActive = false; setRecLabel('RECORD SINGLE CLIP');
             return false;
         }
         function done(frames) {
             window.animationRecording = false;
             window.autoRecordActive = false;
             window.clipCancel = false;
-            setRecLabel('RECORD');
+            setRecLabel('RECORD SINGLE CLIP');
             if (frames && frames.length > 1) {
                 window.recordedFrames = frames;
                 log('recording stopped, frames:', frames.length);
+                progDone(`Recorded ${frames.length} frames`);
             } else {
                 warn('auto record produced no frames');
+                progDone('Recording failed', true);
             }
         }
         waitFrames(CONFIG.CLIP_SETTLE_FRAMES, () => {
@@ -953,9 +956,11 @@
         window.recordingStartTime = performance.now() / 1000;
         setRecLabel('STOP');
         log(`recording started (max ${CONFIG.MAX_RECORD_SECONDS}s)`);
+        progStage(1, 1, 'Recording (press STOP to end)');
         function tick() {
             if (!window.animationRecording) return;
             const t = performance.now() / 1000 - window.recordingStartTime;
+            progSub(t / CONFIG.MAX_RECORD_SECONDS, `${t.toFixed(1)} / ${CONFIG.MAX_RECORD_SECONDS} s`);
             const rf = window.recordedFrames;
             if (fpsDue(t, rf.length ? rf[rf.length - 1].time : -1)) {
                 rf.push({ time: t, meshes: snapshotFrame().meshes });
@@ -971,13 +976,47 @@
         if (window.autoRecordActive) { window.clipCancel = true; return; }
         window.animationRecording = false;
         cancelAnimationFrame(window.recordingRafId);
-        setRecLabel('RECORD');
+        setRecLabel('RECORD SINGLE CLIP');
         log('recording stopped, frames:', window.recordedFrames.length);
+        progDone(`Recorded ${window.recordedFrames.length} frames`);
     }
 
     function setRecLabel(text) {
         const el = document.getElementById('recBtnLabel');
         if (el) el.textContent = text;
+    }
+
+    // ---------------- progress bars: stage (k of n) and sub-stage ----------------
+    let _progHideTimer = null;
+    function progStage(k, n, label) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        clearTimeout(_progHideTimer);
+        box.style.display = 'flex';
+        box.classList.remove('rp-err');
+        document.getElementById('rp-stage-fill').style.width = `${Math.round(100 * k / n)}%`;
+        document.getElementById('rp-stage-label').textContent = `${k}/${n} ${label}`;
+        progSub(0, '');
+    }
+    // frac < 0: work without a measurable fraction (striped bar)
+    function progSub(frac, label) {
+        const fill = document.getElementById('rp-sub-fill');
+        if (!fill) return;
+        const busy = frac < 0;
+        fill.classList.toggle('rp-busy', busy);
+        fill.style.width = busy ? '100%' : `${Math.round(100 * Math.max(0, Math.min(1, frac)))}%`;
+        const l = document.getElementById('rp-sub-label');
+        if (l) l.textContent = label || '';
+    }
+    function progDone(label, isErr) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        box.classList.toggle('rp-err', !!isErr);
+        document.getElementById('rp-stage-fill').style.width = '100%';
+        document.getElementById('rp-stage-label').textContent = label;
+        progSub(isErr ? 1 : 1, isErr ? 'see the console for details' : '');
+        clearTimeout(_progHideTimer);
+        _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
     }
 
     // ====================================================================
@@ -1149,6 +1188,7 @@
             if (window.clipCancel) { finish('cancelled'); return; }
             const t = clockNow();
             if (t >= def.duration) { finish(null); return; }
+            progSub(t / def.duration, `${t.toFixed(1)} / ${def.duration.toFixed(1)} s`);
             const act = activeClipUids(mgr);
             if (act.length !== 1 || act[0] !== def.uid) {
                 // "Play all" advances to the next clip as this one ends, and the sim
@@ -1253,6 +1293,7 @@
             window.clipCancel = false;
             window.clipProgress = '';
             setRecAllLabel('RECORD ALL CLIPS');
+            progDone(window.clipCancel ? 'Recording cancelled' : `Recorded ${window.clips.length} clip(s)`, !!window.clipCancel);
             log(`record-all finished, clips recorded: ${window.clips.length}`);
         }
         try {
@@ -1274,7 +1315,7 @@
         }
         if (_exporting) { warn('export is running: wait for "export done" before recording'); return; }
         const mgr = findAnimationManager();
-        if (!mgr) { warn('no animation manager found; use RECORD (single clip)'); return; }
+        if (!mgr) { warn('no animation manager found; use RECORD SINGLE CLIP'); return; }
         window.clipRecording = true;
         window.clips = [];
         window.recordedFrames = [];   // a stale single recording must not win over the new clips
@@ -1301,6 +1342,7 @@
                 }
                 const d = defs[i++];
                 window.clipProgress = `${i}/${defs.length}`;
+                progStage(i, defs.length, `Recording ${d.name}`);
                 try {
                 recordClip(mgr, d, (frames) => {
                     if (window.clipCancel) {
@@ -1341,52 +1383,94 @@
         if (!document.body) { setTimeout(addbtnfunc, 500); return; }
         if (document.getElementById('ripper-panel')) { button_dw = true; return; }
 
+        if (!document.getElementById('ripper-style')) {
+            const css = document.createElement('style');
+            css.id = 'ripper-style';
+            css.textContent = [
+                '#ripper-panel{position:fixed;top:70px;right:16px;z-index:2147483647;width:212px;box-sizing:border-box;background:rgba(24,25,28,.94);',
+                'backdrop-filter:blur(6px);border:1px solid #3a3d42;border-radius:12px;padding:10px;font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;',
+                'color:#e8eaed;display:flex;flex-direction:column;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.55)}',
+                '#ripper-panel .rp-head{display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid #3a3d42}',
+                '#ripper-panel .rp-title{flex:1;font-weight:700;letter-spacing:.06em;font-size:11px;color:#ff9f43;cursor:move;user-select:none}',
+                '#ripper-panel .rp-gear{cursor:pointer;color:#9aa0a6;font-size:15px;line-height:1;padding:2px 4px;border-radius:6px;user-select:none}',
+                '#ripper-panel .rp-gear:hover{background:#2f3236;color:#fff}',
+                '#ripper-panel .rp-sec{font-size:10px;font-weight:600;letter-spacing:.08em;color:#9aa0a6;text-transform:uppercase;margin-top:2px}',
+                '#ripper-panel .rp-row{display:flex;gap:6px}',
+                '#ripper-panel .rp-btn{flex:1;padding:8px 6px;border:0;border-radius:8px;color:#fff;font:600 11px system-ui,sans-serif;letter-spacing:.03em;cursor:pointer;',
+                'transition:background-color .15s,opacity .15s,transform .05s}',
+                '#ripper-panel .rp-btn:active{transform:translateY(1px)}',
+                '#ripper-panel .rp-dl{background:#1a73e8}#ripper-panel .rp-dl:hover{background:#1765cc}',
+                '#ripper-panel .rp-rec{background:#c5221f}#ripper-panel .rp-rec:hover{background:#a50e0e}',
+                '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
+                '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
+                '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
+                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;white-space:nowrap;overflow:hidden}',
+                '#ripper-progress .rp-lab span:first-child{overflow:hidden;text-overflow:ellipsis}',
+                '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
+                '#ripper-progress .rp-bar.rp-thin{height:4px}',
+                '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
+                '#ripper-progress .rp-thin .rp-fill{background:#5f9cf0}',
+                '#ripper-progress .rp-fill.rp-busy{background:repeating-linear-gradient(45deg,#5f9cf0 0 8px,#3c6fc2 8px 16px);background-size:22px 22px;animation:rp-stripe .7s linear infinite}',
+                '@keyframes rp-stripe{to{background-position:22px 0}}',
+                '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
+                '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
+                '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
+            ].join('');
+            document.head.appendChild(css);
+        }
+
         const panel = document.createElement('div');
         panel.id = 'ripper-panel';
-        panel.style.cssText = [
-            'position:fixed', 'top:70px', 'right:16px', 'z-index:2147483647',
-            'background:rgba(20,20,20,0.9)', 'border:1px solid #444', 'border-radius:8px',
-            'padding:8px', 'font-family:monospace', 'font-size:12px', 'color:#eee',
-            'display:flex', 'flex-direction:column', 'gap:6px', 'min-width:150px',
-            'box-shadow:0 4px 16px rgba(0,0,0,0.5)'
-        ].join(';');
 
         const titleRow = document.createElement('div');
-        titleRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;border-bottom:1px solid #444;';
+        titleRow.className = 'rp-head';
 
         const title = document.createElement('div');
         title.textContent = 'MODEL RIPPER';
-        title.style.cssText = 'font-weight:bold;color:#f80;cursor:move;user-select:none;flex:1;text-align:left;';
+        title.className = 'rp-title';
         titleRow.appendChild(title);
 
         const gear = document.createElement('span');
         gear.textContent = '⚙';
         gear.title = 'Settings';
-        gear.style.cssText = 'cursor:pointer;color:#aaa;font-size:14px;padding:0 4px;user-select:none;';
+        gear.className = 'rp-gear';
         titleRow.appendChild(gear);
 
         panel.appendChild(titleRow);
 
-        const btnDL = document.createElement('button');
-        btnDL.textContent = 'DOWNLOAD GLB';
-        btnDL.style.cssText = 'padding:6px 10px;background:#c22;color:#fff;border:0;border-radius:4px;cursor:pointer;font-family:monospace;font-size:12px;';
-        btnDL.addEventListener('click', () => { downloadGLB(); });
-        panel.appendChild(btnDL);
+        function section(text) {
+            const d = document.createElement('div');
+            d.className = 'rp-sec'; d.textContent = text;
+            panel.appendChild(d);
+        }
+        function button(id, text, cls, onClick) {
+            const b = document.createElement('button');
+            if (id) b.id = id;
+            b.type = 'button';
+            b.className = `rp-btn ${cls}`;
+            b.textContent = text;
+            b.addEventListener('click', onClick);
+            return b;
+        }
 
-        const btnRec = document.createElement('button');
-        btnRec.id = 'recBtnLabel';
-        btnRec.textContent = 'RECORD';
-        btnRec.style.cssText = btnDL.style.cssText;
-        btnRec.addEventListener('click', () => {
+        section('Download');
+        const dlRow = document.createElement('div');
+        dlRow.className = 'rp-row';
+        const btnDL = button('dlGlbBtn', 'GLB', 'rp-dl', () => { downloadGLB('glb'); });
+        btnDL.title = 'Download a ZIP with a .glb file and its textures';
+        const btnFBX = button('dlFbxBtn', 'FBX', 'rp-dl', () => { downloadGLB('fbx'); });
+        btnFBX.title = 'Download a ZIP with a binary .fbx file (FBX 7.4) and its textures';
+        dlRow.appendChild(btnDL);
+        dlRow.appendChild(btnFBX);
+        panel.appendChild(dlRow);
+
+        section('Animation');
+        const btnRec = button('recBtnLabel', 'RECORD SINGLE CLIP', 'rp-rec', () => {
             if (!window.animationRecording) startRecording(); else stopRecording();
         });
         panel.appendChild(btnRec);
 
-        const btnAll = document.createElement('button');
-        btnAll.id = 'recAllBtn';
-        btnAll.textContent = 'RECORD ALL CLIPS';
-        btnAll.style.cssText = btnDL.style.cssText;
-        btnAll.addEventListener('click', () => {
+        const btnAll = button('recAllBtn', 'RECORD ALL CLIPS', 'rp-rec', () => {
             if (window.clipRecording) {
                 window.clipCancel = true;
                 setRecAllLabel('CANCELLING...');
@@ -1397,30 +1481,44 @@
         });
         panel.appendChild(btnAll);
 
-        // RECORD ALL CLIPS only makes sense with 2+ clips: grey it out otherwise.
+        const progBox = document.createElement('div');
+        progBox.id = 'ripper-progress';
+        progBox.innerHTML = '<div class="rp-lab"><span id="rp-stage-label"></span></div>'
+            + '<div class="rp-bar"><div class="rp-fill" id="rp-stage-fill"></div></div>'
+            + '<div class="rp-bar rp-thin"><div class="rp-fill" id="rp-sub-fill"></div></div>'
+            + '<div class="rp-lab"><span id="rp-sub-label"></span></div>';
+        panel.appendChild(progBox);
+
+        // Buttons that can't do anything right now are greyed out:
+        // RECORD SINGLE CLIP needs 1+ clips, RECORD ALL CLIPS needs 2+, downloads wait for recordings.
+        function setOff(b, off, why) {
+            b.disabled = off;
+            b.title = off ? why : (b.dataset.tip || '');
+        }
+        btnDL.dataset.tip = btnDL.title; btnFBX.dataset.tip = btnFBX.title;
         function refreshAllBtn() {
-            if (window.clipRecording) return;
             let n = 0;
             try { n = getClipCount(); } catch (e) {}
-            const off = n < 2;
-            btnAll.disabled = off;
-            btnAll.style.opacity = off ? '0.4' : '1';
-            btnAll.style.cursor = off ? 'not-allowed' : 'pointer';
-            btnAll.title = off ? (n === 1 ? 'Only one clip: use RECORD (records one full loop automatically)' : 'No animation clips found yet') : '';
+            const recBusy = window.animationRecording || window.clipRecording;
+            btnRec.classList.toggle('rp-on', !!window.animationRecording);
+            btnAll.classList.toggle('rp-on', !!window.clipRecording);
+            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? 'No animation clips found on this model' : 'Busy: wait for the current job to end');
+            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? 'Only one clip: use RECORD SINGLE CLIP (records one full loop automatically)' : n < 1 ? 'No animation clips found on this model' : 'Busy: wait for the current job to end');
+            setOff(btnDL, recBusy || _exporting, 'Busy: wait for the recording or export to end');
+            setOff(btnFBX, recBusy || _exporting, 'Busy: wait for the recording or export to end');
         }
         refreshAllBtn();
-        setInterval(refreshAllBtn, 2000);
+        setInterval(refreshAllBtn, 500);
 
         const status = document.createElement('div');
         status.id = 'ripper-status';
-        status.style.cssText = 'font-size:10px;color:#aaa;text-align:center;';
         status.textContent = 'idle';
         panel.appendChild(status);
 
         // ---- config form (hidden until gear clicked) ----
         const configDiv = document.createElement('div');
         configDiv.id = 'ripper-config';
-        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:5px;border-top:1px solid #444;font-size:11px;';
+        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
 
         const row1 = document.createElement('div');
         row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
@@ -1714,7 +1812,7 @@
                           + ' · meshes:' + m + ' frames:' + f
                           + ' · clips:' + getClipCount()
                           + (window.clips.length ? ` (rec ${window.clips.length})` : '');
-            s.style.color = busy ? '#f66' : '#aaa';
+            s.style.color = busy ? '#f28b82' : '#9aa0a6';
         }, 500);
 
         ((el, handle) => {
@@ -2095,16 +2193,103 @@
     // ====================================================================
     // GLB Export
     // ====================================================================
-    function downloadGLB() {
+    // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
+    function downloadGLB(format) {
+        format = format === 'fbx' ? 'fbx' : 'glb';
         if (_exporting) { warn('export already running, ignored'); return; }
         if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
         _exporting = true;
-        log('export started');
-        waitForTextures().then(mergeMRTextures).then(mergeOpacityTextures).then(() => {
-            _downloadGLBSync();
-        }).catch((e) => {
-            _exporting = false;
-            err('export failed:', e.message, e.stack);
+        log(`export started (${format.toUpperCase()})`);
+        const stages = format === 'fbx'
+            ? ['Waiting for textures', 'Merging textures', 'Building scene', 'Writing FBX', 'Splitting metal/rough maps', 'Packing ZIP']
+            : ['Waiting for textures', 'Merging textures', 'Building scene', 'Packing ZIP'];
+        const stage = (k) => progStage(k + 1, stages.length, stages[k]);
+        stage(0);
+        waitForTextures()
+            .then(() => { stage(1); return mergeMRTextures(); })
+            .then(mergeOpacityTextures)
+            .then(() => { stage(2); progSub(-1, 'building meshes, materials and clips'); return nextPaint(); })
+            .then(() => {
+                const built = _downloadGLBSync();
+                if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
+                return exportFBX(built, stage);
+            })
+            .then(() => { _exporting = false; progDone('Done'); })
+            .catch((e) => {
+                _exporting = false;
+                progDone('Export failed', true);
+                err('export failed:', e.message, e.stack);
+            });
+    }
+
+    function nextPaint() { return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); }
+
+    // Zips the model file(s) with the captured textures. extra: { path: Blob }.
+    function packZip(built, files, stage, stageIdx) {
+        stage(stageIdx);
+        const zip = new JSZip();
+        Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
+        for (const tn in built.zipTex) {
+            if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
+                zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
+            }
+        }
+        (built.extraTex || []).forEach((t) => zip.file(t.path, t.blob, { compression: 'STORE' }));
+        return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+            (meta) => progSub(meta.percent / 100, `${Math.round(meta.percent)}%`)).then((content) => {
+            saveAs(content, `${built.modelName}.zip`);
+            log('export done:', `${built.modelName}.zip`);
+        }).catch((e) => { throw new Error('zip failed: ' + e.message); });
+    }
+
+    // zlib deflate for compressed FBX arrays (CompressionStream 'deflate' = zlib format)
+    function zlibDeflate(u8) {
+        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
+        const cs = new CompressionStream('deflate');
+        const out = new Response(cs.readable).arrayBuffer().then((b) => new Uint8Array(b));
+        const w = cs.writable.getWriter(); w.write(u8); w.close();
+        return out;
+    }
+
+    // One channel of an image as a grayscale PNG (FBX has no packed metal/rough map).
+    function splitChannel(blob, channel) {
+        return createImageBitmap(blob).then((bmp) => {
+            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data, k = { R: 0, G: 1, B: 2 }[channel];
+            for (let i = 0; i < d.length; i += 4) { const v = d[i + k]; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
+            cx.putImageData(id, 0, 0);
+            return new Promise((res) => c.toBlob(res, 'image/png'));
+        });
+    }
+
+    function exportFBX(built, stage) {
+        stage(3);
+        const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
+        return FbxWriter.gltfToFbx(built.gltf, built.bin, {
+            creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
+            fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
+            deflate: zlibDeflate,
+            onProgress: (f, label) => progSub(f, label),
+        }).then((res) => {
+            res.warnings.forEach((w) => warn('fbx: ' + w));
+            const st = res.stats;
+            log(`fbx written: ${(res.fbx.byteLength / 1048576).toFixed(1)} MB, models=${st.models} geometries=${st.geometries} materials=${st.materials} textures=${st.textures} clusters=${st.clusters} clips=${st.stacks} curves=${st.curves}`);
+            stage(4);
+            const byUri = {};
+            for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
+            built.extraTex = [];
+            let n = 0;
+            return res.splits.reduce((p, sp) => p.then(() => {
+                progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
+                const src = byUri[sp.src];
+                if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
+                return splitChannel(src, sp.channel).then((b) => { if (b) built.extraTex.push({ path: sp.out, blob: b }); })
+                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
+            }), Promise.resolve()).then(() => {
+                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
+                return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
+            });
         });
     }
 
@@ -3452,27 +3637,1020 @@
 
             const ml2 = document.getElementsByClassName('model-name__label')[0];
             const modelName = (ml2 ? ml2.textContent.trim().replace(/\.+$/, '') : 'model').replace(/[\\\/:*?"<>|]/g, '_') || 'model';
-
-            const zip = new JSZip();
-            zip.file(`${modelName}.glb`, new Blob([glb], { type: 'application/octet-stream' }));
-            for (let tn in zipTex) {
-                if (zipTex.hasOwnProperty(tn) && objects[tn]) {
-                    zip.file(`textures/${zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
-                }
-            }
-            zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } }).then((content) => {
-                saveAs(content, `${modelName}.zip`);
-                log('export done:', `${modelName}.zip`);
-                _exporting = false;
-            }).catch((e) => {
-                _exporting = false;
-                err('zip failed:', e.message);
-            });
+            return { glb, gltf, bin: binAll, zipTex, modelName };
         } catch (e) {
-            _exporting = false;
-            err('export failed:', e.message, e.stack);
+            e.message = 'scene build failed: ' + e.message;
+            throw e;
         }
     }
+
+    // ====================================================================
+    // FBX export: binary FBX 7.4 written from the finished glTF
+    // (same scene as the GLB: nodes, meshes, materials, skins, clips, morphs)
+    // ====================================================================
+    // gltfToFbx(gltf, bin, opts) -> { fbx: ArrayBuffer, splits: [...], stats }
+    //   gltf : glTF JSON object (as written into the GLB)
+    //   bin  : Uint8Array, the GLB binary chunk
+    //   opts : { creator, fps, onProgress(fraction, label) }
+    // splits: textures that FBX needs as separate files (glTF packs roughness
+    //   in G and metalness in B of one image). The caller writes them:
+    //   { src: <image uri>, channel: 'G'|'B', out: <new uri> }
+    const FbxWriter = (function () {
+        'use strict';
+        const KTIME = 46186158000;          // FBX ticks per second
+        const ALWAYS_SENTINEL = { AnimationStack: 1, AnimationLayer: 1 };
+
+        // ---------------- property constructors ----------------
+        const P = {
+            I: (v) => ({ t: 'I', v }), L: (v) => ({ t: 'L', v }), D: (v) => ({ t: 'D', v }),
+            F: (v) => ({ t: 'F', v }), C: (v) => ({ t: 'C', v }), Y: (v) => ({ t: 'Y', v }),
+            S: (v) => ({ t: 'S', v }), R: (v) => ({ t: 'R', v }),
+            d: (a) => ({ t: 'd', v: a instanceof Float64Array ? a : Float64Array.from(a) }),
+            f: (a) => ({ t: 'f', v: a instanceof Float32Array ? a : Float32Array.from(a) }),
+            i: (a) => ({ t: 'i', v: a instanceof Int32Array ? a : Int32Array.from(a) }),
+            l: (a) => ({ t: 'l', v: a }),   // array of numbers (int64)
+        };
+        function node(name, props, children) { return { name, props: props || [], children: children || [] }; }
+        const enc = new TextEncoder();
+        function strBytes(s) { return typeof s === 'string' ? enc.encode(s) : s; }
+        function objName(name, cls) {     // "Name\x00\x01Class"
+            const a = enc.encode(name || ''), b = enc.encode(cls);
+            const out = new Uint8Array(a.length + 2 + b.length);
+            out.set(a, 0); out[a.length] = 0; out[a.length + 1] = 1; out.set(b, a.length + 2);
+            return out;
+        }
+
+        // ---------------- binary encoder (two passes: size, then write) ----------------
+        function propSize(p) {
+            switch (p.t) {
+                case 'Y': return 3; case 'C': return 2; case 'I': case 'F': return 5;
+                case 'D': case 'L': return 9;
+                case 'S': case 'R': p._b = strBytes(p.v); return 5 + p._b.length;
+                case 'd': case 'l': return 13 + (p.z ? p.z.length : p.v.length * 8);
+                case 'f': case 'i': return 13 + (p.z ? p.z.length : p.v.length * 4);
+            }
+            throw new Error('FBX: bad property type ' + p.t);
+        }
+        function nodeSize(n) {
+            n._nb = enc.encode(n.name);
+            let ps = 0; for (const p of n.props) ps += propSize(p);
+            n._ps = ps;
+            let s = 13 + n._nb.length + ps;
+            if (n.children.length || ALWAYS_SENTINEL[n.name]) {
+                for (const c of n.children) s += nodeSize(c);
+                s += 13;
+            }
+            n._size = s;
+            return s;
+        }
+        function writeNodes(roots, version, creatorTime) {
+            const head = enc.encode('Kaydara FBX Binary  ');
+            let total = head.length + 3 + 4;
+            for (const r of roots) total += nodeSize(r);
+            total += 13;                                  // end of top-level list
+            const footLen = 16 + 4 + 16 + 4 + 120 + 16;   // worst case padding 16
+            const buf = new ArrayBuffer(total + footLen);
+            const dv = new DataView(buf), u8 = new Uint8Array(buf);
+            let o = 0;
+            u8.set(head, 0); o = head.length;
+            u8[o++] = 0; u8[o++] = 0x1A; u8[o++] = 0;
+            dv.setUint32(o, version, true); o += 4;
+            function wProp(p) {
+                u8[o++] = p.t.charCodeAt(0);
+                switch (p.t) {
+                    case 'Y': dv.setInt16(o, p.v, true); o += 2; break;
+                    case 'C': u8[o++] = p.v ? 1 : 0; break;
+                    case 'I': dv.setInt32(o, p.v, true); o += 4; break;
+                    case 'F': dv.setFloat32(o, p.v, true); o += 4; break;
+                    case 'D': dv.setFloat64(o, p.v, true); o += 8; break;
+                    case 'L': dv.setBigInt64(o, BigInt(Math.round(p.v)), true); o += 8; break;
+                    case 'S': case 'R': dv.setUint32(o, p._b.length, true); o += 4; u8.set(p._b, o); o += p._b.length; break;
+                    default: {
+                        const n = p.v.length, w = (p.t === 'd' || p.t === 'l') ? 8 : 4;
+                        if (p.z) {   // zlib-compressed array (encoding 1)
+                            dv.setUint32(o, n, true); dv.setUint32(o + 4, 1, true); dv.setUint32(o + 8, p.z.length, true); o += 12;
+                            u8.set(p.z, o); o += p.z.length;
+                            break;
+                        }
+                        dv.setUint32(o, n, true); dv.setUint32(o + 4, 0, true); dv.setUint32(o + 8, n * w, true); o += 12;
+                        if (p.t === 'd') { for (let k = 0; k < n; k++, o += 8) dv.setFloat64(o, p.v[k], true); }
+                        else if (p.t === 'f') { for (let k = 0; k < n; k++, o += 4) dv.setFloat32(o, p.v[k], true); }
+                        else if (p.t === 'i') { for (let k = 0; k < n; k++, o += 4) dv.setInt32(o, p.v[k], true); }
+                        else { for (let k = 0; k < n; k++, o += 8) dv.setBigInt64(o, BigInt(Math.round(p.v[k])), true); }
+                    }
+                }
+            }
+            function wNode(n) {
+                const start = o;
+                dv.setUint32(o, start + n._size, true);
+                dv.setUint32(o + 4, n.props.length, true);
+                dv.setUint32(o + 8, n._ps, true);
+                u8[o + 12] = n._nb.length; o += 13;
+                u8.set(n._nb, o); o += n._nb.length;
+                for (const p of n.props) wProp(p);
+                if (n.children.length || ALWAYS_SENTINEL[n.name]) {
+                    for (const c of n.children) wNode(c);
+                    o += 13;                               // null record (already zero)
+                }
+                if (o !== start + n._size) throw new Error('FBX: size mismatch in ' + n.name);
+            }
+            for (const r of roots) wNode(r);
+            o += 13;
+            // footer (same layout as files from the FBX SDK)
+            u8.set([0xfa, 0xbc, 0xab, 0x09, 0xd0, 0xc8, 0xd4, 0x66, 0xb1, 0x76, 0xfb, 0x83, 0x1c, 0xf7, 0x26, 0x7e], o); o += 16;
+            o += 4;
+            let pad = ((o + 15) & ~15) - o; if (pad === 0) pad = 16;
+            o += pad;
+            dv.setUint32(o, version, true); o += 4;
+            o += 120;
+            u8.set([0xf8, 0x5a, 0x8c, 0x6a, 0xde, 0xf5, 0xd9, 0x7e, 0xec, 0xe9, 0x0c, 0xe3, 0x75, 0x8f, 0x29, 0x0b], o); o += 16;
+            return buf.slice(0, o);
+        }
+
+        // raw little-endian bytes of an array property
+        function arrayBytes(p) {
+            let ta;
+            if (p.t === 'd') ta = p.v instanceof Float64Array ? p.v : Float64Array.from(p.v);
+            else if (p.t === 'f') ta = p.v instanceof Float32Array ? p.v : Float32Array.from(p.v);
+            else if (p.t === 'i') ta = p.v instanceof Int32Array ? p.v : Int32Array.from(p.v);
+            else { ta = new BigInt64Array(p.v.length); for (let k = 0; k < p.v.length; k++) ta[k] = BigInt(Math.round(p.v[k])); }
+            return new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength);
+        }
+        // compress big arrays with the caller's zlib deflate (async), like FBX SDK files
+        async function compressArrays(roots, deflate, prog) {
+            const list = [];
+            (function walk(n) { for (const p of n.props) if ('dfil'.includes(p.t) && p.t.length === 1 && p.v.length * (p.t === 'd' || p.t === 'l' ? 8 : 4) >= 1024) list.push(p); n.children.forEach(walk); })({ props: [], children: roots });
+            let total = 0; list.forEach((p) => { total += p.v.length; });
+            let done = 0;
+            for (const p of list) {
+                const raw = arrayBytes(p);
+                const z = await deflate(raw);
+                if (z && z.length < raw.length) p.z = z;
+                done += p.v.length;
+                prog(done / Math.max(1, total));
+            }
+            return list.length;
+        }
+
+        // ---------------- Properties70 helper ----------------
+        function P70(list) {
+            return node('Properties70', [], list.map((e) => {
+                const [name, t1, t2, flags, ...vals] = e;
+                const props = [P.S(name), P.S(t1), P.S(t2), P.S(flags)];
+                for (const v of vals) {
+                    if (typeof v === 'string') props.push(P.S(v));
+                    else if (t1 === 'KTime') props.push(P.L(v));
+                    else if (t1 === 'int' || t1 === 'enum' || t1 === 'bool' || t1 === 'Integer') props.push(P.I(v | 0));
+                    else props.push(P.D(v));
+                }
+                return node('P', props);
+            }));
+        }
+
+        // ---------------- math ----------------
+        function mul4(a, b) {   // column-major
+            const r = new Array(16);
+            for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) {
+                let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + rr] * b[c * 4 + k];
+                r[c * 4 + rr] = s;
+            }
+            return r;
+        }
+        function inv4(m) {
+            const a = m, inv = new Array(16);
+            inv[0] = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15] + a[9] * a[7] * a[14] + a[13] * a[6] * a[11] - a[13] * a[7] * a[10];
+            inv[4] = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15] - a[8] * a[7] * a[14] - a[12] * a[6] * a[11] + a[12] * a[7] * a[10];
+            inv[8] = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15] + a[8] * a[7] * a[13] + a[12] * a[5] * a[11] - a[12] * a[7] * a[9];
+            inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14] - a[8] * a[6] * a[13] - a[12] * a[5] * a[10] + a[12] * a[6] * a[9];
+            inv[1] = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15] - a[9] * a[3] * a[14] - a[13] * a[2] * a[11] + a[13] * a[3] * a[10];
+            inv[5] = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15] + a[8] * a[3] * a[14] + a[12] * a[2] * a[11] - a[12] * a[3] * a[10];
+            inv[9] = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15] - a[8] * a[3] * a[13] - a[12] * a[1] * a[11] + a[12] * a[3] * a[9];
+            inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14] + a[8] * a[2] * a[13] + a[12] * a[1] * a[10] - a[12] * a[2] * a[9];
+            inv[2] = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15] + a[5] * a[3] * a[14] + a[13] * a[2] * a[7] - a[13] * a[3] * a[6];
+            inv[6] = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15] - a[4] * a[3] * a[14] - a[12] * a[2] * a[7] + a[12] * a[3] * a[6];
+            inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15] + a[4] * a[3] * a[13] + a[12] * a[1] * a[7] - a[12] * a[3] * a[5];
+            inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14] - a[4] * a[2] * a[13] - a[12] * a[1] * a[6] + a[12] * a[2] * a[5];
+            inv[3] = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11] - a[5] * a[3] * a[10] - a[9] * a[2] * a[7] + a[9] * a[3] * a[6];
+            inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11] + a[4] * a[3] * a[10] + a[8] * a[2] * a[7] - a[8] * a[3] * a[6];
+            inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11] - a[4] * a[3] * a[9] - a[8] * a[1] * a[7] + a[8] * a[3] * a[5];
+            inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10] + a[4] * a[2] * a[9] + a[8] * a[1] * a[6] - a[8] * a[2] * a[5];
+            let det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+            if (!det || !isFinite(det)) return null;
+            det = 1 / det;
+            for (let k = 0; k < 16; k++) inv[k] *= det;
+            return inv;
+        }
+        function trsMat(t, q, s) {
+            const [x, y, z, w] = q;
+            const xx = x * x, yy = y * y, zz = z * z, xy = x * y, xz = x * z, yz = y * z, wx = w * x, wy = w * y, wz = w * z;
+            return [
+                (1 - 2 * (yy + zz)) * s[0], 2 * (xy + wz) * s[0], 2 * (xz - wy) * s[0], 0,
+                2 * (xy - wz) * s[1], (1 - 2 * (xx + zz)) * s[1], 2 * (yz + wx) * s[1], 0,
+                2 * (xz + wy) * s[2], 2 * (yz - wx) * s[2], (1 - 2 * (xx + yy)) * s[2], 0,
+                t[0], t[1], t[2], 1];
+        }
+        function nodeLocal(n) {
+            if (n.matrix) return n.matrix.slice();
+            return trsMat(n.translation || [0, 0, 0], n.rotation || [0, 0, 0, 1], n.scale || [1, 1, 1]);
+        }
+        // matrix -> {t, q, s, shear}; negative determinant flips the X scale
+        function decompose(m) {
+            const t = [m[12], m[13], m[14]];
+            let c0 = [m[0], m[1], m[2]], c1 = [m[4], m[5], m[6]], c2 = [m[8], m[9], m[10]];
+            const len = (v) => Math.hypot(v[0], v[1], v[2]);
+            let sx = len(c0), sy = len(c1), sz = len(c2);
+            const det = c0[0] * (c1[1] * c2[2] - c1[2] * c2[1]) - c1[0] * (c0[1] * c2[2] - c0[2] * c2[1]) + c2[0] * (c0[1] * c1[2] - c0[2] * c1[1]);
+            if (det < 0) sx = -sx;
+            const n = (v, l) => l ? [v[0] / l, v[1] / l, v[2] / l] : [0, 0, 0];
+            c0 = n(c0, sx); c1 = n(c1, sy); c2 = n(c2, sz);
+            const shear = Math.abs(c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2]) + Math.abs(c0[0] * c2[0] + c0[1] * c2[1] + c0[2] * c2[2]) + Math.abs(c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2]);
+            return { t, q: quatFromRot(c0, c1, c2), s: [sx, sy, sz], shear };
+        }
+        function quatFromRot(c0, c1, c2) {   // columns of a rotation matrix
+            const m00 = c0[0], m10 = c0[1], m20 = c0[2], m01 = c1[0], m11 = c1[1], m21 = c1[2], m02 = c2[0], m12 = c2[1], m22 = c2[2];
+            const tr = m00 + m11 + m22; let x, y, z, w;
+            if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; w = s / 4; x = (m21 - m12) / s; y = (m02 - m20) / s; z = (m10 - m01) / s; }
+            else if (m00 > m11 && m00 > m22) { const s = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / s; x = s / 4; y = (m01 + m10) / s; z = (m02 + m20) / s; }
+            else if (m11 > m22) { const s = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / s; x = (m01 + m10) / s; y = s / 4; z = (m12 + m21) / s; }
+            else { const s = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / s; x = (m02 + m20) / s; y = (m12 + m21) / s; z = s / 4; }
+            const l = Math.hypot(x, y, z, w) || 1;
+            return [x / l, y / l, z / l, w / l];
+        }
+        // quaternion -> FBX Euler XYZ in degrees (R = Rz * Ry * Rx), closest to prev
+        const R2D = 180 / Math.PI;
+        function quatToEuler(q, prev) {
+            const [x, y, z, w] = q;
+            const m00 = 1 - 2 * (y * y + z * z), m10 = 2 * (x * y + w * z), m20 = 2 * (x * z - w * y);
+            const m21 = 2 * (y * z + w * x), m22 = 1 - 2 * (x * x + y * y);
+            const m01 = 2 * (x * y - w * z), m11 = 1 - 2 * (x * x + z * z);
+            let ex, ey, ez;
+            const sy = -m20;
+            if (Math.abs(sy) < 0.9999999) {
+                ey = Math.asin(Math.max(-1, Math.min(1, sy)));
+                ex = Math.atan2(m21, m22);
+                ez = Math.atan2(m10, m00);
+            } else {   // gimbal lock: put everything into X
+                ey = sy > 0 ? Math.PI / 2 : -Math.PI / 2;
+                ez = prev ? prev[2] / R2D : 0;
+                ex = Math.atan2(-m01 * (sy > 0 ? 1 : -1), m11) + (sy > 0 ? ez : -ez);
+            }
+            let e = [ex * R2D, ey * R2D, ez * R2D];
+            if (prev) {
+                const alt = [e[0] + 180, 180 - e[1], e[2] + 180];
+                const wrap = (v, p) => v + 360 * Math.round((p - v) / 360);
+                const fit = (c) => c.map((v, i) => wrap(v, prev[i]));
+                const a = fit(e), b = fit(alt);
+                const da = Math.abs(a[0] - prev[0]) + Math.abs(a[1] - prev[1]) + Math.abs(a[2] - prev[2]);
+                const db = Math.abs(b[0] - prev[0]) + Math.abs(b[1] - prev[1]) + Math.abs(b[2] - prev[2]);
+                e = da <= db ? a : b;
+            }
+            return e;
+        }
+        function eulerToQuat(e) {
+            const hx = e[0] / R2D / 2, hy = e[1] / R2D / 2, hz = e[2] / R2D / 2;
+            const cx = Math.cos(hx), sx = Math.sin(hx), cy = Math.cos(hy), sy = Math.sin(hy), cz = Math.cos(hz), sz = Math.sin(hz);
+            // q = qz * qy * qx
+            return [sx * cy * cz - cx * sy * sz, cx * sy * cz + sx * cy * sz, cx * cy * sz - sx * sy * cz, cx * cy * cz + sx * sy * sz];
+        }
+        function slerp(a, b, u) {
+            let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+            let bb = b; if (d < 0) { d = -d; bb = [-b[0], -b[1], -b[2], -b[3]]; }
+            if (d > 0.9995) {
+                const r = [a[0] + (bb[0] - a[0]) * u, a[1] + (bb[1] - a[1]) * u, a[2] + (bb[2] - a[2]) * u, a[3] + (bb[3] - a[3]) * u];
+                const l = Math.hypot(...r); return r.map((v) => v / l);
+            }
+            const th = Math.acos(d), s = Math.sin(th), wa = Math.sin((1 - u) * th) / s, wb = Math.sin(u * th) / s;
+            return [a[0] * wa + bb[0] * wb, a[1] * wa + bb[1] * wb, a[2] * wa + bb[2] * wb, a[3] * wa + bb[3] * wb];
+        }
+        function quatAngle(a, b) {
+            const d = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
+            return 2 * Math.acos(Math.min(1, d)) * R2D;
+        }
+
+        // ---------------- glTF accessor reader ----------------
+        function makeReader(gltf, bin) {
+            const dvBin = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+            const SIZE = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+            const NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+            return function read(idx) {
+                const a = gltf.accessors[idx];
+                const nc = NC[a.type], cs = SIZE[a.componentType], n = a.count;
+                const out = new Float64Array(n * nc);
+                if (a.bufferView !== undefined) {
+                    const bv = gltf.bufferViews[a.bufferView];
+                    const stride = bv.byteStride || nc * cs;
+                    const base = (bv.byteOffset || 0) + (a.byteOffset || 0);
+                    for (let e = 0; e < n; e++) for (let c = 0; c < nc; c++) {
+                        const p = base + e * stride + c * cs;
+                        let v;
+                        switch (a.componentType) {
+                            case 5126: v = dvBin.getFloat32(p, true); break;
+                            case 5121: v = dvBin.getUint8(p); if (a.normalized) v /= 255; break;
+                            case 5120: v = dvBin.getInt8(p); if (a.normalized) v = Math.max(v / 127, -1); break;
+                            case 5123: v = dvBin.getUint16(p, true); if (a.normalized) v /= 65535; break;
+                            case 5122: v = dvBin.getInt16(p, true); if (a.normalized) v = Math.max(v / 32767, -1); break;
+                            case 5125: v = dvBin.getUint32(p, true); break;
+                        }
+                        out[e * nc + c] = v;
+                    }
+                }
+                if (a.sparse) {
+                    const si = a.sparse.indices, sv = a.sparse.values, cnt = a.sparse.count;
+                    const ib = gltf.bufferViews[si.bufferView], vb = gltf.bufferViews[sv.bufferView];
+                    const io = (ib.byteOffset || 0) + (si.byteOffset || 0), vo = (vb.byteOffset || 0) + (sv.byteOffset || 0);
+                    for (let k = 0; k < cnt; k++) {
+                        const ix = si.componentType === 5125 ? dvBin.getUint32(io + k * 4, true) : si.componentType === 5123 ? dvBin.getUint16(io + k * 2, true) : dvBin.getUint8(io + k);
+                        for (let c = 0; c < nc; c++) out[ix * nc + c] = dvBin.getFloat32(vo + (k * nc + c) * 4, true);
+                    }
+                }
+                out.nc = nc;
+                return out;
+            };
+        }
+
+        // ---------------- converter ----------------
+        async function gltfToFbx(gltf, bin, opts) {
+            opts = opts || {};
+            const prog = opts.onProgress || function () {};
+            // give the page a chance to repaint the progress bars during long work
+            let lastYield = Date.now();
+            const yieldUI = () => (Date.now() - lastYield > 40 ? new Promise((r) => setTimeout(() => { lastYield = Date.now(); r(); }, 0)) : null);
+            const fps = opts.fps || 30;
+            const read = makeReader(gltf, bin);
+            const warnings = [];
+            const nodes = gltf.nodes || [];
+            let nextId = 1000000;
+            const newId = () => nextId++;
+            const objects = [], conns = [];
+            const counts = {};
+            function addObj(type, n) { objects.push(n); counts[type] = (counts[type] || 0) + 1; return n; }
+            const OO = (c, p) => conns.push(node('C', [P.S('OO'), P.L(c), P.L(p)]));
+            const OP = (c, p, prop) => conns.push(node('C', [P.S('OP'), P.L(c), P.L(p), P.S(prop)]));
+
+            // ---- node roles ----
+            const parentOf = new Array(nodes.length).fill(-1);
+            nodes.forEach((n, i) => (n.children || []).forEach((c) => { parentOf[c] = i; }));
+            const isJoint = new Array(nodes.length).fill(false);
+            (gltf.skins || []).forEach((s) => s.joints.forEach((j) => { isJoint[j] = true; }));
+            const local = nodes.map(nodeLocal);
+            const world = new Array(nodes.length);
+            function worldOf(i) {
+                if (world[i]) return world[i];
+                world[i] = parentOf[i] < 0 ? local[i] : mul4(worldOf(parentOf[i]), local[i]);
+                return world[i];
+            }
+            nodes.forEach((_, i) => worldOf(i));
+
+            // ---- models ----
+            prog(0.02, 'nodes');
+            const modelId = new Array(nodes.length);
+            const restTRS = new Array(nodes.length);
+            let sheared = 0;
+            nodes.forEach((n, i) => {
+                const id = modelId[i] = newId();
+                const d = decompose(local[i]);
+                if (d.shear > 1e-3) sheared++;
+                const e = quatToEuler(d.q, null);
+                restTRS[i] = { t: d.t, e, s: d.s, q: d.q };
+                const kind = isJoint[i] ? 'LimbNode' : (n.mesh !== undefined ? 'Mesh' : 'Null');
+                addObj('Model', node('Model', [P.L(id), P.S(objName(n.name || ('node_' + i), 'Model')), P.S(kind)], [
+                    node('Version', [P.I(232)]),
+                    P70([
+                        ['Lcl Translation', 'Lcl Translation', '', 'A', d.t[0], d.t[1], d.t[2]],
+                        ['Lcl Rotation', 'Lcl Rotation', '', 'A', e[0], e[1], e[2]],
+                        ['Lcl Scaling', 'Lcl Scaling', '', 'A', d.s[0], d.s[1], d.s[2]],
+                        ['InheritType', 'enum', '', '', 1],
+                        ['DefaultAttributeIndex', 'int', 'Integer', '', 0],
+                    ]),
+                    node('Shading', [P.C(true)]),
+                    node('Culling', [P.S('CullingOff')]),
+                ]));
+                if (isJoint[i]) {
+                    const aid = newId();
+                    addObj('NodeAttribute', node('NodeAttribute', [P.L(aid), P.S(objName(n.name || ('node_' + i), 'NodeAttribute')), P.S('LimbNode')], [
+                        P70([['Size', 'double', 'Number', '', 1]]),
+                        node('TypeFlags', [P.S('Skeleton')]),
+                    ]));
+                    OO(aid, id);
+                }
+            });
+            nodes.forEach((n, i) => OO(modelId[i], parentOf[i] < 0 ? 0 : modelId[parentOf[i]]));
+            if (sheared) warnings.push(`${sheared} node transform(s) have shear; FBX keeps only translation, rotation and scale`);
+
+            // ---- materials and textures ----
+            prog(0.06, 'materials');
+            const images = gltf.images || [], textures = gltf.textures || [];
+            const splits = [];
+            const videoFor = {};      // uri -> video id
+            const texCache = {};      // key -> texture id
+            function imageInfo(imgIdx) {
+                const img = images[imgIdx] || {};
+                if (img.uri) return { uri: img.uri, bytes: null };
+                if (img.bufferView !== undefined) {
+                    const bv = gltf.bufferViews[img.bufferView];
+                    const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                    return { uri: `textures/${(img.name || ('image_' + imgIdx)).replace(/[^\w.-]/g, '_')}.${ext}`, bytes: bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength) };
+                }
+                return null;
+            }
+            function textureFor(uri, bytes, label) {
+                const key = uri;
+                if (texCache[key]) return texCache[key];
+                const base = uri.split('/').pop();
+                let vid = videoFor[uri];
+                if (!vid) {
+                    vid = videoFor[uri] = newId();
+                    const vkids = [
+                        node('Type', [P.S('Clip')]),
+                        P70([['Path', 'KString', 'XRefUrl', '', uri]]),
+                        node('UseMipMap', [P.I(0)]),
+                        node('Filename', [P.S(uri)]),
+                        node('RelativeFilename', [P.S(uri)]),
+                    ];
+                    if (bytes) vkids.push(node('Content', [P.R(bytes)]));
+                    addObj('Video', node('Video', [P.L(vid), P.S(objName(base, 'Video')), P.S('Clip')], vkids));
+                }
+                const tid = newId();
+                addObj('Texture', node('Texture', [P.L(tid), P.S(objName(label || base, 'Texture')), P.S('')], [
+                    node('Type', [P.S('TextureVideoClip')]),
+                    node('Version', [P.I(202)]),
+                    node('TextureName', [P.S(objName(label || base, 'Texture'))]),
+                    P70([['UseMaterial', 'bool', '', '', 1]]),
+                    node('Media', [P.S(objName(base, 'Video'))]),
+                    node('FileName', [P.S(uri)]),
+                    node('RelativeFilename', [P.S(uri)]),
+                    node('ModelUVTranslation', [P.D(0), P.D(0)]),
+                    node('ModelUVScaling', [P.D(1), P.D(1)]),
+                    node('Texture_Alpha_Source', [P.S('None')]),
+                    node('Cropping', [P.I(0), P.I(0), P.I(0), P.I(0)]),
+                ]));
+                OO(vid, tid);
+                texCache[key] = tid;
+                return tid;
+            }
+            function texOf(ref) {
+                if (!ref || typeof ref.index !== 'number' || !textures[ref.index]) return null;
+                const src = textures[ref.index].source;
+                return src === undefined ? null : imageInfo(src);
+            }
+            function splitUri(uri, ch) {
+                const dot = uri.lastIndexOf('.'), stem = dot > 0 ? uri.slice(0, dot) : uri;
+                return `${stem}_${ch === 'G' ? 'roughness' : 'metallic'}.png`;
+            }
+            const matId = (gltf.materials || []).map((m, mi) => {
+                const id = newId();
+                const pbr = m.pbrMetallicRoughness || {};
+                const bc = pbr.baseColorFactor || [1, 1, 1, 1];
+                const metal = pbr.metallicFactor === undefined ? 1 : pbr.metallicFactor;
+                const rough = pbr.roughnessFactor === undefined ? 1 : pbr.roughnessFactor;
+                const em0 = m.emissiveFactor || [0, 0, 0];
+                // with an emissive texture, apps read EmissiveFactor as the strength
+                const emK = (m.emissiveTexture && Math.max(...em0) > 0) ? Math.max(...em0) : 1;
+                const em = em0.map((v) => v / emK);
+                const shin = Math.pow((1 - rough) * 10, 2);
+                const alpha = (m.alphaMode === 'BLEND' || m.alphaMode === 'MASK') ? bc[3] : 1;
+                addObj('Material', node('Material', [P.L(id), P.S(objName(m.name || ('material_' + mi), 'Material')), P.S('')], [
+                    node('Version', [P.I(102)]),
+                    node('ShadingModel', [P.S('Phong')]),
+                    node('MultiLayer', [P.I(0)]),
+                    P70([
+                        ['DiffuseColor', 'Color', '', 'A', bc[0], bc[1], bc[2]],
+                        ['DiffuseFactor', 'Number', '', 'A', 1],
+                        ['EmissiveColor', 'Color', '', 'A', em[0], em[1], em[2]],
+                        ['EmissiveFactor', 'Number', '', 'A', emK],
+                        ['SpecularColor', 'Color', '', 'A', 1, 1, 1],
+                        ['SpecularFactor', 'Number', '', 'A', 0.5],
+                        ['Shininess', 'Number', '', 'A', shin],
+                        ['ShininessExponent', 'Number', '', 'A', shin],
+                        ['ReflectionColor', 'Color', '', 'A', 1, 1, 1],
+                        ['ReflectionFactor', 'Number', '', 'A', metal],
+                        ['TransparentColor', 'Color', '', 'A', 1, 1, 1],
+                        ['TransparencyFactor', 'Number', '', 'A', 1 - alpha],
+                        ['Opacity', 'Number', '', 'A', alpha],
+                    ]),
+                ]));
+                const link = (info, prop, label) => { if (info) OP(textureFor(info.uri, info.bytes, label), id, prop); };
+                const base = texOf(pbr.baseColorTexture);
+                link(base, 'DiffuseColor');
+                if (base && (m.alphaMode === 'BLEND' || m.alphaMode === 'MASK')) link(base, 'TransparentColor');
+                link(texOf(m.normalTexture), 'NormalMap');
+                link(texOf(m.emissiveTexture), 'EmissiveColor');
+                const mr = texOf(pbr.metallicRoughnessTexture);
+                if (mr) {
+                    if (mr.bytes) warnings.push(`material "${m.name}": embedded metal/rough image not split`);
+                    else {
+                        const ru = splitUri(mr.uri, 'G'), mu = splitUri(mr.uri, 'B');
+                        splits.push({ src: mr.uri, channel: 'G', out: ru }, { src: mr.uri, channel: 'B', out: mu });
+                        link({ uri: ru }, 'ShininessExponent');
+                        link({ uri: mu }, 'ReflectionFactor');
+                    }
+                }
+                return id;
+            });
+            // splits may repeat when materials share one image
+            const seenSplit = {};
+            const uniqSplits = splits.filter((s) => (seenSplit[s.out] ? false : (seenSplit[s.out] = true)));
+
+            // ---- skinned meshes: choose a clean bind frame ----
+            // glTF IBMs may carry the viewer's skeleton->geometry matrix (non-uniform
+            // scale / shear). Pick M = W_rest(root) * IBM_root as the mesh bind matrix:
+            // then bone binds M * inv(IBM_j) are clean, and the leftover K = inv(C) * M
+            // (C = the mesh model's own world matrix) is baked into the vertices.
+            const skinBind = {};      // meshIdx -> { M, C, K, K3n }
+            nodes.forEach((n, i) => {
+                if (n.skin === undefined || n.mesh === undefined || skinBind[n.mesh]) return;
+                const skin = gltf.skins[n.skin];
+                if (skin.inverseBindMatrices === undefined) return;
+                const ibm = read(skin.inverseBindMatrices);
+                let r = skin.joints.findIndex((jn) => !isJoint[parentOf[jn]] || parentOf[jn] < 0);
+                if (r < 0) r = 0;
+                const M = mul4(worldOf(skin.joints[r]), Array.from(ibm.subarray(r * 16, r * 16 + 16)));
+                const C = worldOf(i);
+                const K = mul4(inv4(C) || C, M);
+                const L = inv4(K);
+                // normal matrix = inverse transpose of the 3x3 part
+                const K3n = L ? [L[0], L[1], L[2], L[4], L[5], L[6], L[8], L[9], L[10]] : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+                skinBind[n.mesh] = { M, C, K, K3n, ibm };
+            });
+            const xfP = (K, x, y, z) => [K[0] * x + K[4] * y + K[8] * z + K[12], K[1] * x + K[5] * y + K[9] * z + K[13], K[2] * x + K[6] * y + K[10] * z + K[14]];
+            const xfV = (K, x, y, z) => [K[0] * x + K[4] * y + K[8] * z, K[1] * x + K[5] * y + K[9] * z, K[2] * x + K[6] * y + K[10] * z];
+            const xfNd = (N, x, y, z) => [N[0] * x + N[1] * y + N[2] * z, N[3] * x + N[4] * y + N[5] * z, N[6] * x + N[7] * y + N[8] * z];
+            const xfN = (N, x, y, z) => {
+                const v = xfNd(N, x, y, z);
+                const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l];
+            };
+
+            // ---- geometry ----
+            prog(0.10, 'geometry');
+            const geomOfMesh = {};    // meshIdx -> { id, vcount, offsets per primitive, matIdx list }
+            const meshes = gltf.meshes || [];
+            const geomOne = (mesh, mi) => {
+                prog(0.10 + 0.45 * mi / Math.max(1, meshes.length), `geometry ${mi + 1}/${meshes.length}`);
+                const prims = mesh.primitives.filter((p) => (p.mode === undefined || p.mode === 4) && p.attributes.POSITION !== undefined);
+                if (prims.length < mesh.primitives.length) warnings.push(`mesh "${mesh.name}": ${mesh.primitives.length - prims.length} non-triangle primitive(s) skipped`);
+                if (!prims.length) return;
+                const pos = [], nrm = [], uv0 = [], uv1 = [], col = [], idx = [], pmat = [], offs = [];
+                let base = 0, hasN = false, hasUV0 = false, hasUV1 = false, hasC = false;
+                prims.forEach((p) => {
+                    if (p.attributes.NORMAL !== undefined) hasN = true;
+                    if (p.attributes.TEXCOORD_0 !== undefined) hasUV0 = true;
+                    if (p.attributes.TEXCOORD_1 !== undefined) hasUV1 = true;
+                    if (p.attributes.COLOR_0 !== undefined) hasC = true;
+                });
+                const matList = [];
+                prims.forEach((p) => {
+                    const P3 = read(p.attributes.POSITION), n = P3.length / 3;
+                    offs.push(base);
+                    const sb = skinBind[mi];
+                    if (sb) { for (let e = 0; e < n; e++) pos.push(...xfP(sb.K, P3[e * 3], P3[e * 3 + 1], P3[e * 3 + 2])); }
+                    else for (let k = 0; k < P3.length; k++) pos.push(P3[k]);
+                    const fill = (arr, acc, w, def) => {
+                        if (acc !== undefined) { const a = read(acc); const c = a.nc; for (let e = 0; e < n; e++) for (let k = 0; k < w; k++) arr.push(k < c ? a[e * c + k] : def[k]); }
+                        else for (let e = 0; e < n; e++) for (let k = 0; k < w; k++) arr.push(def[k]);
+                    };
+                    if (hasN) {
+                        const n0 = nrm.length;
+                        fill(nrm, p.attributes.NORMAL, 3, [0, 0, 1]);
+                        if (sb) for (let k = n0; k < nrm.length; k += 3) { const v = xfN(sb.K3n, nrm[k], nrm[k + 1], nrm[k + 2]); nrm[k] = v[0]; nrm[k + 1] = v[1]; nrm[k + 2] = v[2]; }
+                    }
+                    if (hasUV0) fill(uv0, p.attributes.TEXCOORD_0, 2, [0, 0]);
+                    if (hasUV1) fill(uv1, p.attributes.TEXCOORD_1, 2, [0, 0]);
+                    if (hasC) fill(col, p.attributes.COLOR_0, 4, [1, 1, 1, 1]);
+                    const I = p.indices !== undefined ? read(p.indices) : Array.from({ length: n }, (_, k) => k);
+                    let ml = matList.indexOf(p.material === undefined ? -1 : p.material);
+                    if (ml < 0) { matList.push(p.material === undefined ? -1 : p.material); ml = matList.length - 1; }
+                    for (let k = 0; k + 2 < I.length; k += 3) {
+                        idx.push(I[k] + base, I[k + 1] + base, -(I[k + 2] + base) - 1);
+                        pmat.push(ml);
+                    }
+                    base += n;
+                });
+                const vcount = base;
+                const pvi = Int32Array.from(idx);
+                // per polygon-vertex helpers
+                const corner = new Int32Array(pvi.length);
+                for (let k = 0; k < pvi.length; k++) corner[k] = pvi[k] < 0 ? -pvi[k] - 1 : pvi[k];
+                const kids = [
+                    node('Vertices', [P.d(pos)]),
+                    node('PolygonVertexIndex', [P.i(pvi)]),
+                    node('GeometryVersion', [P.I(124)]),
+                ];
+                const layerEls = [];
+                if (hasN) {
+                    const pn = new Float64Array(corner.length * 3);
+                    for (let k = 0; k < corner.length; k++) { pn[k * 3] = nrm[corner[k] * 3]; pn[k * 3 + 1] = nrm[corner[k] * 3 + 1]; pn[k * 3 + 2] = nrm[corner[k] * 3 + 2]; }
+                    kids.push(node('LayerElementNormal', [P.I(0)], [
+                        node('Version', [P.I(101)]), node('Name', [P.S('')]),
+                        node('MappingInformationType', [P.S('ByPolygonVertex')]),
+                        node('ReferenceInformationType', [P.S('Direct')]),
+                        node('Normals', [P.d(pn)]),
+                    ]));
+                    layerEls.push(['LayerElementNormal', 0]);
+                }
+                const uvLayer = (uv, li, nm) => {
+                    const flipped = new Float64Array(uv.length);
+                    for (let k = 0; k < uv.length; k += 2) { flipped[k] = uv[k]; flipped[k + 1] = 1 - uv[k + 1]; }
+                    kids.push(node('LayerElementUV', [P.I(li)], [
+                        node('Version', [P.I(101)]), node('Name', [P.S(nm)]),
+                        node('MappingInformationType', [P.S('ByPolygonVertex')]),
+                        node('ReferenceInformationType', [P.S('IndexToDirect')]),
+                        node('UV', [P.d(flipped)]),
+                        node('UVIndex', [P.i(corner)]),
+                    ]));
+                    layerEls.push(['LayerElementUV', li]);
+                };
+                if (hasUV0) uvLayer(uv0, 0, 'UVMap');
+                if (hasUV1) uvLayer(uv1, 1, 'UVMap2');
+                if (hasC) {
+                    // glTF COLOR_0 is linear; FBX apps treat vertex colours as sRGB
+                    const l2s = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+                    for (let k = 0; k < col.length; k++) if (k % 4 !== 3) col[k] = l2s(Math.min(1, Math.max(0, col[k])));
+                    kids.push(node('LayerElementColor', [P.I(0)], [
+                        node('Version', [P.I(101)]), node('Name', [P.S('Col')]),
+                        node('MappingInformationType', [P.S('ByPolygonVertex')]),
+                        node('ReferenceInformationType', [P.S('IndexToDirect')]),
+                        node('Colors', [P.d(col)]),
+                        node('ColorIndex', [P.i(corner)]),
+                    ]));
+                    layerEls.push(['LayerElementColor', 0]);
+                }
+                const single = matList.length === 1;
+                kids.push(node('LayerElementMaterial', [P.I(0)], [
+                    node('Version', [P.I(101)]), node('Name', [P.S('')]),
+                    node('MappingInformationType', [P.S(single ? 'AllSame' : 'ByPolygon')]),
+                    node('ReferenceInformationType', [P.S('IndexToDirect')]),
+                    node('Materials', [P.i(single ? [0] : pmat)]),
+                ]));
+                layerEls.push(['LayerElementMaterial', 0]);
+                const byLayer = {};
+                layerEls.forEach(([t, li]) => { (byLayer[li] = byLayer[li] || []).push(t); });
+                Object.keys(byLayer).forEach((li) => {
+                    kids.push(node('Layer', [P.I(+li)], [node('Version', [P.I(100)])].concat(byLayer[li].map((t) => node('LayerElement', [], [node('Type', [P.S(t)]), node('TypedIndex', [P.I(+li)])])))));
+                });
+                const gid = newId();
+                addObj('Geometry', node('Geometry', [P.L(gid), P.S(objName(mesh.name || ('mesh_' + mi), 'Geometry')), P.S('Mesh')], kids));
+                geomOfMesh[mi] = { id: gid, vcount, offs, prims, matList };
+            };
+            for (let mi = 0; mi < meshes.length; mi++) { geomOne(meshes[mi], mi); const y = yieldUI(); if (y) await y; }
+
+            // ---- connect geometry and materials to models ----
+            nodes.forEach((n, i) => {
+                if (n.mesh === undefined || !geomOfMesh[n.mesh]) return;
+                const g = geomOfMesh[n.mesh];
+                let target = modelId[i];
+                if (isJoint[i]) {   // a joint can't also be the mesh model: hang a child mesh model under it
+                    target = newId();
+                    addObj('Model', node('Model', [P.L(target), P.S(objName((n.name || 'node') + '_mesh', 'Model')), P.S('Mesh')], [
+                        node('Version', [P.I(232)]), P70([['InheritType', 'enum', '', '', 1]]),
+                    ]));
+                    OO(target, modelId[i]);
+                }
+                g.model = g.model || target;
+                OO(g.id, target);
+                g.matList.forEach((mt) => { if (mt >= 0 && matId[mt]) OO(matId[mt], target); });
+                n._fbxMeshModel = target;
+            });
+
+            // ---- morph targets -> BlendShape ----
+            prog(0.58, 'morph targets');
+            const channelIds = {};    // meshIdx -> [channel ids]
+            meshes.forEach((mesh, mi) => {
+                const g = geomOfMesh[mi]; if (!g) return;
+                const nT = Math.max(0, ...g.prims.map((p) => (p.targets || []).length));
+                if (!nT) return;
+                const names = (mesh.extras && mesh.extras.targetNames) || [];
+                const bsId = newId();
+                addObj('Deformer', node('Deformer', [P.L(bsId), P.S(objName(mesh.name || 'mesh', 'Deformer')), P.S('BlendShape')], [node('Version', [P.I(100)])]));
+                OO(bsId, g.id);
+                const ids = [];
+                for (let t = 0; t < nT; t++) {
+                    const ind = [], dpos = [], dnrm = [];
+                    g.prims.forEach((p, pi) => {
+                        const tg = (p.targets || [])[t]; if (!tg || tg.POSITION === undefined) return;
+                        const dp = read(tg.POSITION), dn = tg.NORMAL !== undefined ? read(tg.NORMAL) : null;
+                        for (let e = 0; e < dp.length / 3; e++) {
+                            if (Math.abs(dp[e * 3]) + Math.abs(dp[e * 3 + 1]) + Math.abs(dp[e * 3 + 2]) < 1e-9 && !(dn && Math.abs(dn[e * 3]) + Math.abs(dn[e * 3 + 1]) + Math.abs(dn[e * 3 + 2]) > 1e-9)) continue;
+                            ind.push(e + g.offs[pi]);
+                            const sbm = skinBind[mi];
+                            if (sbm) dpos.push(...xfV(sbm.K, dp[e * 3], dp[e * 3 + 1], dp[e * 3 + 2]));
+                            else dpos.push(dp[e * 3], dp[e * 3 + 1], dp[e * 3 + 2]);
+                            if (dn) dnrm.push(...(sbm ? xfNd(sbm.K3n, dn[e * 3], dn[e * 3 + 1], dn[e * 3 + 2]) : [dn[e * 3], dn[e * 3 + 1], dn[e * 3 + 2]]));
+                            else dnrm.push(0, 0, 0);
+                        }
+                    });
+                    const nm = names[t] || `target_${t}`;
+                    const shId = newId(), chId = newId();
+                    const w0 = (mesh.weights && mesh.weights[t]) || 0;
+                    addObj('Geometry', node('Geometry', [P.L(shId), P.S(objName(nm, 'Geometry')), P.S('Shape')], [
+                        node('Version', [P.I(100)]),
+                        node('Indexes', [P.i(ind)]),
+                        node('Vertices', [P.d(dpos)]),
+                        node('Normals', [P.d(dnrm)]),
+                    ]));
+                    addObj('Deformer', node('Deformer', [P.L(chId), P.S(objName(nm, 'SubDeformer')), P.S('BlendShapeChannel')], [
+                        node('Version', [P.I(100)]),
+                        node('DeformPercent', [P.D(w0 * 100)]),
+                        node('FullWeights', [P.d([100])]),
+                        P70([['DeformPercent', 'Number', '', 'A', w0 * 100]]),
+                    ]));
+                    OO(shId, chId); OO(chId, bsId);
+                    ids.push(chId);
+                }
+                channelIds[mi] = ids;
+            });
+
+            // ---- skins -> Skin + Clusters + BindPose ----
+            prog(0.64, 'skins');
+            const poseNodes = {};     // model id -> matrix
+            nodes.forEach((n, i) => {
+                if (n.skin === undefined || n.mesh === undefined || !geomOfMesh[n.mesh]) return;
+                const skin = gltf.skins[n.skin], g = geomOfMesh[n.mesh];
+                const meshModel = n._fbxMeshModel;
+                const sbk = skinBind[n.mesh];
+                const C = sbk ? sbk.C : worldOf(i);
+                const MB = sbk ? sbk.M : C;      // bind matrix the IBMs are relative to
+                const ibm = skin.inverseBindMatrices !== undefined ? read(skin.inverseBindMatrices) : null;
+                const nJ = skin.joints.length;
+                const perJ = Array.from({ length: nJ }, () => ({ ind: [], w: [] }));
+                g.prims.forEach((p, pi) => {
+                    for (let set = 0; set < 4; set++) {
+                        const ja = p.attributes['JOINTS_' + set], wa = p.attributes['WEIGHTS_' + set];
+                        if (ja === undefined || wa === undefined) break;
+                        const J = read(ja), W = read(wa);
+                        for (let e = 0; e < J.length / 4; e++) for (let k = 0; k < 4; k++) {
+                            const w = W[e * 4 + k]; if (!(w > 0)) continue;
+                            const j = J[e * 4 + k]; if (j >= nJ) continue;
+                            perJ[j].ind.push(e + g.offs[pi]); perJ[j].w.push(w);
+                        }
+                    }
+                });
+                const skId = newId();
+                addObj('Deformer', node('Deformer', [P.L(skId), P.S(objName(n.name || 'skin', 'Deformer')), P.S('Skin')], [
+                    node('Version', [P.I(101)]), node('Link_DeformAcuracy', [P.D(50)]),
+                ]));
+                OO(skId, g.id);
+                poseNodes[meshModel] = C;
+                // the armature is the nearest non-joint ancestor of the joints (importers bind the mesh against it)
+                let armNode = -1;
+                for (const jn of skin.joints) {
+                    let p = parentOf[jn];
+                    while (p >= 0 && isJoint[p]) p = parentOf[p];
+                    if (p >= 0) { armNode = p; break; }
+                }
+                const armW = armNode >= 0 ? worldOf(armNode) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+                if (armNode >= 0 && !poseNodes[modelId[armNode]]) poseNodes[modelId[armNode]] = armW;
+                skin.joints.forEach((jn, j) => {
+                    const ib = ibm ? Array.from(ibm.subarray(j * 16, j * 16 + 16)) : inv4(mul4(inv4(C) || C, worldOf(jn)));
+                    const ibInv = inv4(ib) || worldOf(jn);
+                    const link = mul4(MB, ibInv);          // bone world matrix at bind time
+                    const tx = mul4(inv4(link) || link, C); // FBX "Transform": mesh bind relative to the bone
+                    const cid = newId();
+                    addObj('Deformer', node('Deformer', [P.L(cid), P.S(objName(nodes[jn].name || ('joint_' + j), 'SubDeformer')), P.S('Cluster')], [
+                        node('Version', [P.I(100)]),
+                        node('UserData', [P.S(''), P.S('')]),
+                        node('Indexes', [P.i(perJ[j].ind)]),
+                        node('Weights', [P.d(perJ[j].w)]),
+                        node('Transform', [P.d(tx)]),
+                        node('TransformLink', [P.d(link)]),
+                        node('TransformAssociateModel', [P.d(armW)]),
+                    ]));
+                    OO(cid, skId);
+                    OO(modelId[jn], cid);
+                    if (!poseNodes[modelId[jn]]) poseNodes[modelId[jn]] = link;
+                });
+            });
+            const poseIds = Object.keys(poseNodes);
+            if (poseIds.length) {
+                const pid = newId();
+                addObj('Pose', node('Pose', [P.L(pid), P.S(objName('BindPose', 'Pose')), P.S('BindPose')], [
+                    node('Type', [P.S('BindPose')]),
+                    node('Version', [P.I(100)]),
+                    node('NbPoseNodes', [P.I(poseIds.length)]),
+                ].concat(poseIds.map((k) => node('PoseNode', [], [node('Node', [P.L(+k)]), node('Matrix', [P.d(poseNodes[k])])])))));
+            }
+
+            // ---- animation clips ----
+            prog(0.70, 'animation');
+            const anims = gltf.animations || [];
+            let maxT = 0;
+            const toTicks = (t) => Math.round(t * KTIME);
+            function curve(times, vals, flagsKind) {
+                const id = newId();
+                const n = times.length;
+                addObj('AnimationCurve', node('AnimationCurve', [P.L(id), P.S(objName('', 'AnimCurve')), P.S('')], [
+                    node('Default', [P.D(vals[0] || 0)]),
+                    node('KeyVer', [P.I(4008)]),
+                    node('KeyTime', [P.l(times.map(toTicks))]),
+                    node('KeyValueFloat', [P.f(vals)]),
+                    node('KeyAttrFlags', [P.i([flagsKind === 'STEP' ? 0x00000002 : 0x00000004])]),
+                    node('KeyAttrDataFloat', [P.f([0, 0, 9.419963346924634e-30, 0])]),
+                    node('KeyAttrRefCount', [P.i([n])]),
+                ]));
+                return id;
+            }
+            // Euler curves can't slerp: add keys until linear Euler stays within tol of the slerp
+            function rotKeys(times, quats, step) {
+                const outT = [], outE = [];
+                let prevE = null;
+                const push = (t, q) => { const e = quatToEuler(q, prevE); prevE = e; outT.push(t); outE.push(e); };
+                push(times[0], quats[0]);
+                for (let k = 1; k < times.length; k++) {
+                    const qa = quats[k - 1], qb = quats[k], ta = times[k - 1], tb = times[k];
+                    if (step) { push(tb, qb); continue; }
+                    const seg = (ua, ub, ea, depth) => {
+                        const eb = quatToEuler(slerp(qa, qb, ub), ea);
+                        const um = (ua + ub) / 2;
+                        const em = [(ea[0] + eb[0]) / 2, (ea[1] + eb[1]) / 2, (ea[2] + eb[2]) / 2];
+                        // also split long arcs: apps that lerp quaternion keys drift from slerp there
+                        if (depth < 7 && (quatAngle(eulerToQuat(em), slerp(qa, qb, um)) > 0.05 || quatAngle(slerp(qa, qb, ua), slerp(qa, qb, ub)) > 12)) {
+                            const emid = seg(ua, um, ea, depth + 1);
+                            return seg(um, ub, emid, depth + 1);
+                        }
+                        prevE = eb; outT.push(ta + (tb - ta) * ub); outE.push(eb);
+                        return eb;
+                    };
+                    seg(0, 1, prevE, 0);
+                }
+                return { t: outT, e: outE };
+            }
+            // every clip keys everything that any clip animates, so switching clips in an
+            // app never leaves a bone in the pose of the previous clip
+            const animatedPaths = {};
+            anims.forEach((a) => a.channels.forEach((ch) => {
+                if (ch.target.node !== undefined) (animatedPaths[ch.target.node] = animatedPaths[ch.target.node] || {})[ch.target.path] = true;
+            }));
+            function restValue(ni, path) {
+                const r = restTRS[ni];
+                if (path === 'translation') return r.t;
+                if (path === 'rotation') return r.q;
+                if (path === 'scale') return r.s;
+                const mesh = meshes[nodes[ni].mesh] || {}, nT = (channelIds[nodes[ni].mesh] || []).length;
+                return Array.from({ length: nT }, (_, k) => (mesh.weights && mesh.weights[k]) || 0);
+            }
+            const animOne = (anim, ai) => {
+                prog(0.70 + 0.25 * ai / Math.max(1, anims.length), `animation ${ai + 1}/${anims.length}`);
+                const name = anim.name || ('clip_' + ai);
+                const stId = newId(), lyId = newId();
+                let t0 = Infinity, t1 = 0;
+                const groups = {};    // node -> {translation, rotation, scale, weights}
+                anim.channels.forEach((ch) => {
+                    if (ch.target.node === undefined) return;
+                    (groups[ch.target.node] = groups[ch.target.node] || {})[ch.target.path] = anim.samplers[ch.sampler];
+                });
+                Object.keys(animatedPaths).forEach((ni) => Object.keys(animatedPaths[ni]).forEach((path) => {
+                    const gs = groups[ni] = groups[ni] || {};
+                    if (!gs[path]) gs[path] = { constVals: restValue(+ni, path) };
+                }));
+
+                Object.keys(groups).forEach((ni) => {
+                    ni = +ni;
+                    const gset = groups[ni];
+                    const tgtModel = modelId[ni];
+                    const sample = (smp) => {
+                        if (smp.constVals) return { t: [0], v: [smp.constVals], step: false };
+                        const tt = Array.from(read(smp.input)), vv = read(smp.output);
+                        const nc = vv.nc, cub = smp.interpolation === 'CUBICSPLINE';
+                        const vals = [];
+                        for (let k = 0; k < tt.length; k++) {
+                            const off = cub ? (k * 3 + 1) * nc : k * nc;
+                            vals.push(Array.from(vv.subarray(off, off + nc)));
+                        }
+                        tt.forEach((t) => { if (t < t0) t0 = t; if (t > t1) t1 = t; });
+                        return { t: tt, v: vals, step: smp.interpolation === 'STEP' };
+                    };
+                    const vecCurves = (label, prop, smp, conv) => {
+                        const s = sample(smp);
+                        const vals = s.v.map(conv);
+                        const cn = newId();
+                        addObj('AnimationCurveNode', node('AnimationCurveNode', [P.L(cn), P.S(objName(label, 'AnimCurveNode')), P.S('')], [
+                            P70(['X', 'Y', 'Z'].map((c, k) => ['d|' + c, 'Number', '', 'A', vals[0][k]])),
+                        ]));
+                        OO(cn, lyId); OP(cn, tgtModel, prop);
+                        ['X', 'Y', 'Z'].forEach((c, k) => OP(curve(s.t, vals.map((v) => v[k]), s.step ? 'STEP' : ''), cn, 'd|' + c));
+                    };
+                    if (gset.translation) vecCurves('T', 'Lcl Translation', gset.translation, (v) => v);
+                    if (gset.scale) vecCurves('S', 'Lcl Scaling', gset.scale, (v) => v);
+                    if (gset.rotation) {
+                        const s = sample(gset.rotation);
+                        const rk = rotKeys(s.t, s.v, s.step);
+                        const cn = newId();
+                        addObj('AnimationCurveNode', node('AnimationCurveNode', [P.L(cn), P.S(objName('R', 'AnimCurveNode')), P.S('')], [
+                            P70(['X', 'Y', 'Z'].map((c, k) => ['d|' + c, 'Number', '', 'A', rk.e[0][k]])),
+                        ]));
+                        OO(cn, lyId); OP(cn, tgtModel, 'Lcl Rotation');
+                        ['X', 'Y', 'Z'].forEach((c, k) => OP(curve(rk.t, rk.e.map((v) => v[k]), s.step ? 'STEP' : ''), cn, 'd|' + c));
+                    }
+                    if (gset.weights) {
+                        const mi = nodes[ni].mesh, chs = channelIds[mi];
+                        if (chs) {
+                            const cw = gset.weights.constVals;
+                            const tt = cw ? [0] : Array.from(read(gset.weights.input)), vv = cw ? Float64Array.from(cw) : read(gset.weights.output);
+                            const nT = chs.length, cub = gset.weights.interpolation === 'CUBICSPLINE';
+                            tt.forEach((t) => { if (t < t0) t0 = t; if (t > t1) t1 = t; });
+                            chs.forEach((chId, k) => {
+                                const vals = tt.map((_, e) => 100 * vv[(cub ? (e * 3 + 1) : e) * nT + k]);
+                                const cn = newId();
+                                addObj('AnimationCurveNode', node('AnimationCurveNode', [P.L(cn), P.S(objName('DeformPercent', 'AnimCurveNode')), P.S('')], [
+                                    P70([['d|DeformPercent', 'Number', '', 'A', vals[0]]]),
+                                ]));
+                                OO(cn, lyId); OP(cn, chId, 'DeformPercent');
+                                OP(curve(tt, vals, gset.weights.interpolation === 'STEP' ? 'STEP' : ''), cn, 'd|DeformPercent');
+                            });
+                        }
+                    }
+                });
+                if (!isFinite(t0)) { t0 = 0; t1 = 0; }
+                maxT = Math.max(maxT, t1);
+                addObj('AnimationStack', node('AnimationStack', [P.L(stId), P.S(objName(name, 'AnimStack')), P.S('')], [
+                    P70([
+                        ['LocalStart', 'KTime', 'Time', '', toTicks(t0)],
+                        ['LocalStop', 'KTime', 'Time', '', toTicks(t1)],
+                        ['ReferenceStart', 'KTime', 'Time', '', toTicks(t0)],
+                        ['ReferenceStop', 'KTime', 'Time', '', toTicks(t1)],
+                    ]),
+                ]));
+                addObj('AnimationLayer', node('AnimationLayer', [P.L(lyId), P.S(objName('BaseLayer', 'AnimLayer')), P.S('')], []));
+                OO(lyId, stId);
+                anim._fbx = { name, t0, t1 };
+            };
+            for (let ai = 0; ai < anims.length; ai++) { animOne(anims[ai], ai); const y = yieldUI(); if (y) await y; }
+
+            // ---- document ----
+            prog(0.96, 'writing file');
+            const now = new Date();
+            const creator = opts.creator || 'Sketchfab Ripper';
+            const defs = [node('Version', [P.I(100)]), node('Count', [P.I(Object.values(counts).reduce((a, b) => a + b, 1))]),
+                node('ObjectType', [P.S('GlobalSettings')], [node('Count', [P.I(1)])])]
+                .concat(Object.keys(counts).map((t) => node('ObjectType', [P.S(t)], [node('Count', [P.I(counts[t])])])));
+            const fpsMode = { 120: 1, 100: 2, 60: 3, 50: 4, 48: 5, 30: 6, 25: 10, 24: 11, 1000: 12, 96: 15, 72: 16 }[fps] || 14;
+            const roots = [
+                node('FBXHeaderExtension', [], [
+                    node('FBXHeaderVersion', [P.I(1003)]),
+                    node('FBXVersion', [P.I(7400)]),
+                    node('EncryptionType', [P.I(0)]),
+                    node('CreationTimeStamp', [], [
+                        node('Version', [P.I(1000)]), node('Year', [P.I(now.getFullYear())]), node('Month', [P.I(now.getMonth() + 1)]),
+                        node('Day', [P.I(now.getDate())]), node('Hour', [P.I(now.getHours())]), node('Minute', [P.I(now.getMinutes())]),
+                        node('Second', [P.I(now.getSeconds())]), node('Millisecond', [P.I(0)]),
+                    ]),
+                    node('Creator', [P.S(creator)]),
+                ]),
+                node('FileId', [P.R(new Uint8Array([0x28, 0xb3, 0x2a, 0xeb, 0xb6, 0x24, 0xcc, 0xc2, 0xbf, 0xc8, 0xb0, 0x2a, 0xa9, 0x2b, 0xfc, 0xf1]))]),
+                node('CreationTime', [P.S('1970-01-01 10:00:00:000')]),
+                node('Creator', [P.S(creator)]),
+                node('GlobalSettings', [], [
+                    node('Version', [P.I(1000)]),
+                    P70([
+                        ['UpAxis', 'int', 'Integer', '', 1], ['UpAxisSign', 'int', 'Integer', '', 1],
+                        ['FrontAxis', 'int', 'Integer', '', 2], ['FrontAxisSign', 'int', 'Integer', '', 1],
+                        ['CoordAxis', 'int', 'Integer', '', 0], ['CoordAxisSign', 'int', 'Integer', '', 1],
+                        ['OriginalUpAxis', 'int', 'Integer', '', 1], ['OriginalUpAxisSign', 'int', 'Integer', '', 1],
+                        ['UnitScaleFactor', 'double', 'Number', '', 100], ['OriginalUnitScaleFactor', 'double', 'Number', '', 100],
+                        ['AmbientColor', 'ColorRGB', 'Color', '', 0, 0, 0],
+                        ['DefaultCamera', 'KString', '', '', 'Producer Perspective'],
+                        ['TimeMode', 'enum', '', '', fpsMode],
+                        ['TimeProtocol', 'enum', '', '', 2],
+                        ['SnapOnFrameMode', 'enum', '', '', 0],
+                        ['TimeSpanStart', 'KTime', 'Time', '', 0],
+                        ['TimeSpanStop', 'KTime', 'Time', '', toTicks(maxT || 1)],
+                        ['CustomFrameRate', 'double', 'Number', '', fps],
+                        ['CurrentTimeMarker', 'int', 'Integer', '', -1],
+                    ]),
+                ]),
+                node('Documents', [], [
+                    node('Count', [P.I(1)]),
+                    node('Document', [P.L(newId()), P.S(''), P.S('Scene')], [
+                        P70([['SourceObject', 'object', '', ''], ['ActiveAnimStackName', 'KString', '', '', anims.length ? anims[0]._fbx.name : '']]),
+                        node('RootNode', [P.L(0)]),
+                    ]),
+                ]),
+                node('References', [], []),
+                node('Definitions', [], defs),
+                node('Objects', [], objects),
+                node('Connections', [], conns),
+                node('Takes', [], [node('Current', [P.S('')])].concat(anims.map((a) => node('Take', [P.S(a._fbx.name)], [
+                    node('FileName', [P.S(a._fbx.name.replace(/[^\w.-]/g, '_') + '.tak')]),
+                    node('LocalTime', [P.L(toTicks(a._fbx.t0)), P.L(toTicks(a._fbx.t1))]),
+                    node('ReferenceTime', [P.L(toTicks(a._fbx.t0)), P.L(toTicks(a._fbx.t1))]),
+                ])))),
+            ];
+            anims.forEach((a) => { delete a._fbx; });
+            nodes.forEach((n) => { delete n._fbxMeshModel; });
+            if (opts.deflate) {
+                try { await compressArrays(roots, opts.deflate, (f) => prog(0.96 + 0.035 * f, 'compressing')); }
+                catch (e) { warnings.push('compression failed, file written uncompressed: ' + e.message); (function clr(n) { n.props.forEach((p) => { delete p.z; }); n.children.forEach(clr); })({ props: [], children: roots }); }
+            }
+            prog(0.995, 'writing file');
+            { const y = yieldUI(); if (y) await y; }
+            const fbx = writeNodes(roots, 7400);
+            prog(1, 'done');
+            return {
+                fbx, splits: uniqSplits, warnings,
+                stats: { models: counts.Model || 0, geometries: counts.Geometry || 0, materials: counts.Material || 0, textures: counts.Texture || 0, clusters: objects.filter((o) => o.props[2] && o.props[2].v === 'Cluster').length, stacks: counts.AnimationStack || 0, curves: counts.AnimationCurve || 0 },
+            };
+        }
+        return { gltfToFbx, _test: { quatToEuler, eulerToQuat, decompose, writeNodes, node, P } };
+    })();
 
     // ====================================================================
     // Script interceptor

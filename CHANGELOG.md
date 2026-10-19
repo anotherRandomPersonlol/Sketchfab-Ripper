@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.5.0
+
+### New
+- FBX export: click **FBX** under **Download**. The zip has a binary FBX 7.4 file and the `textures` folder. The file has the same scene as the GLB: nodes, meshes, materials and textures, the skeleton with its bind pose and skin weights, every recorded clip (one animation stack each), morph targets with their animated weights, and vertex colors. Tested by importing into Blender 5.2 and comparing every vertex with the GLB, in the rest pose and in every clip.
+- Progress bars: one bar shows the stage (for example "3/6 Building scene" or "2/5 Recording Idle") and one bar shows the progress in that stage.
+
+### Changed
+- The panel has a new look. The download buttons are blue, the record buttons are red, and a button that cannot be used is grey.
+- RECORD is now RECORD SINGLE CLIP. It is grey when the model has no animation clips.
+- The download buttons are grey while a recording or an export runs.
+
 ## v1.4.0
 
 ### Fixed
