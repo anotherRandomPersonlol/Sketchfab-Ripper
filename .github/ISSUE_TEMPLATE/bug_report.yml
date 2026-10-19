@@ -67,8 +67,8 @@ body:
       description: Write one action on each line.
       placeholder: |
         1. Open the model page.
-        2. Click RECORD.
-        3. Click DOWNLOAD GLB.
+        2. Click RECORD SINGLE CLIP.
+        3. Click GLB (or FBX) under Download.
     validations:
       required: true
   - type: textarea

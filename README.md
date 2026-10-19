@@ -6,11 +6,12 @@
 > Respect the copyright of the model creators and the Sketchfab terms of service.
 > Do not use this tool to share models that you do not have the rights to.
 
-Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the Sketchfab viewer shows as a GLB file, with the skeleton, the animation and the textures.
+Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the Sketchfab viewer shows as a GLB or FBX file, with the skeleton, the animation and the textures.
 
 ## Features
 
 - GLB export with skeleton and skinning: bone names, parents and bind pose.
+- FBX export (binary FBX 7.4) of the same scene: skeleton, skin, all recorded clips, morph targets (shape keys), vertex colors and materials.
 - Animation recording: one full loop of the active clip, or all clips of a multi-clip model.
 - Animation of unskinned parts and of morph target weights.
 - PBR textures: base color, normal, metallic-roughness, emission, occlusion, opacity and alpha mask (cutout).
@@ -18,6 +19,7 @@ Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the
 - Vertex colors, multiple primitives in one mesh, triangle strips and fans.
 - Single-sided and double-sided materials, the same as in the viewer.
 - Bones with non-uniform scale and shear, exported without data loss.
+- Progress bars for recording and export: the current stage and the progress in that stage.
 - A settings panel (gear icon) that keeps your settings.
 
 ## Requirements
@@ -51,12 +53,14 @@ If the install page does not open:
 1. Open a model page on Sketchfab.
 2. Wait until the model is fully visible and the **MODEL RIPPER** panel shows (top right).
 3. If the model has animation, do one of these steps:
-   - To record the active clip, click **RECORD**. The script records one full loop and stops.
+   - To record the active clip, click **RECORD SINGLE CLIP**. The script records one full loop and stops.
    - To record all clips, click **RECORD ALL CLIPS**.
-4. Wait until the recording stops.
-5. Click **DOWNLOAD GLB**.
+4. Wait until the recording stops. The progress bars show the clip and the time in the clip.
+5. Under **Download**, click **GLB** or **FBX**.
 
-The download is a zip file. It contains the GLB file and a `textures` folder.
+The download is a zip file. It contains the GLB or FBX file and a `textures` folder.
+
+The record buttons are grey when the model has no animation clips (RECORD ALL CLIPS needs two or more). The download buttons are grey while a recording or an export runs.
 
 If you do not record, the export contains the model in its current pose.
 
@@ -87,6 +91,13 @@ Click the gear icon in the panel. The script keeps your settings for the next vi
 - **glTF viewer**: drop the GLB file on [gltf-viewer.donmccurdy.com](https://gltf-viewer.donmccurdy.com/). This viewer shows the export exactly.
 - **Blender**: use **File > Import > glTF 2.0** with the default options.
 - **Validator**: drop the GLB file on the [glTF validator](https://github.khronos.org/glTF-Validator/) to check it.
+- **FBX in Blender**: use **File > Import > FBX** with the default options. Each clip becomes an action (Dope Sheet > Action Editor). Keep the `textures` folder next to the FBX file.
+
+### FBX notes
+
+- The FBX file uses Y up and meters, the same as the GLB.
+- FBX has no packed metal/roughness texture. The zip has a separate roughness map and metallic map (`*_roughness.png`, `*_metallic.png`). The roughness map is in the Shininess Exponent slot, which Blender reads as roughness. Other apps can read that slot as glossiness: if a material is too shiny, invert that map.
+- Blender shows transparent materials in Dithered mode after an FBX import. The GLB import uses Blended mode.
 
 ## Tested models
 
