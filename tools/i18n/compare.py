@@ -50,22 +50,25 @@ def main():
     srcs = [(os.path.splitext(os.path.basename(f))[0], read_numbered(f)) for f in files]
     same = 0
     for i, (label, k, form, en) in enumerate(rows, 1):
-        ours = strings[lang].get(k)
-        ours = ours.get(form) if isinstance(ours, dict) else ours
-        if ours is None:
+        ours_all = strings[lang].get(k)
+        if ours_all is None:
             continue
+        # plural: the source may give any of our forms (Polish has more forms than English)
+        cands = list(ours_all.values()) if isinstance(ours_all, dict) else [ours_all]
+        ours = ours_all.get(form, cands[0]) if isinstance(ours_all, dict) else ours_all
         lines, differs = [], False
         for name, got in srcs:
             g = got.get(i)
             if g is None:
                 lines.append(f'      {name:>9}: (no line {i})'); continue
-            r = difflib.SequenceMatcher(None, norm(ours), norm(g)).ratio()
+            r = max(difflib.SequenceMatcher(None, norm(c), norm(g)).ratio() for c in cands)
             lost = set(PH.findall(en)) - set(PH.findall(g))
             if r < 0.999 or lost:
                 differs = True
             lines.append(f'      {name:>9}: {g}   [{r:.2f}]' + (f'  LOST {sorted(lost)}' if lost else ''))
         if differs:
-            print(f'{i:>3}. {label}\n      {"English":>9}: {en}\n      {"ours":>9}: {ours}')
+            shown = ' / '.join(f'{f}: {v}' for f, v in ours_all.items()) if isinstance(ours_all, dict) else ours
+            print(f'{i:>3}. {label}\n      {"English":>9}: {en}\n      {"ours":>9}: {shown}')
             print('\n'.join(lines) + '\n')
         else:
             same += 1
