@@ -21,7 +21,8 @@ import json, os, re, subprocess, sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 SRC = os.path.join(ROOT, 'src', 'Sketchfab-ripper.user.js')
-SAME_OK = {'btn_glb', 'btn_fbx', 'opt_auto', 'pr_seconds', 'st_clips'}
+# same word as English in some languages (for example "Animation" in German and French)
+SAME_OK = {'btn_glb', 'btn_fbx', 'opt_auto', 'pr_seconds', 'st_clips', 'sec_animation', 'fbx_animation', 'fbx_animation_n'}
 DYNAMIC_PREFIX = ('fbx_',)      # built from FbxWriter progress labels in fbxLabel()
 PH = re.compile(r'\{(\w+)\}')
 
