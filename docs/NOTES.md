@@ -164,6 +164,14 @@ If the console shows `init` and `panel added` but no `patched` lines, the
 wrong bundle was served. Reload (the panel hints after 8 s and reloads
 once after 12 s). With zero meshes in the panel, patch_4 did not fire.
 
+### 15b. The original bundle still runs (review R7, tested 2026-10-20)
+`dispatch` cancels a bundle with `textContent = ''` and `remove()`. Chromium test with a fake bundle:
+- a `<script src>` in the HTML: only the patched copy runs.
+- a `<script src>` added by code (how webpack loads chunks): the original ALSO runs, after the patched copy.
+It works today, probably because webpack skips a chunk that is already installed. If a viewer update
+breaks capture although every patch applied, check this first. The proper fix is to replace the script
+at insertion time (hook `appendChild`/`insertBefore`) instead of removing it after insertion.
+
 ### 16. Fixed gotchas (do NOT regress)
 - The MutationObserver must watch `document`, not `document.head`.
 - Guard per-frame pixel reads: `if (saveimagecache2[url].dataURL) return;`

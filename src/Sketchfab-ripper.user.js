@@ -30,6 +30,8 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.js
 // @run-at       document-start
 // @grant        unsafeWindow
+// @inject-into  page
+// @sandbox      JavaScript
 // @homepageURL  https://github.com/anotherRandomPersonlol/Sketchfab-Ripper
 // @supportURL   https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/issues
 // ==/UserScript==
@@ -2852,6 +2854,7 @@
         }, 8000);
 
         setTimeout(() => {
+            reportMissingPatches();   // anchors matched, but maybe not all five patches
             if (window._anyAnchorsMatched) return;
             let already;
             try { already = sessionStorage.getItem('ripper_reloaded'); } catch (e) { already = '1'; }
@@ -3274,6 +3277,7 @@
         if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
         _exporting = true;
         log(`export started (${format.toUpperCase()})`);
+        logViewerCapabilities();
         const stages = format === 'fbx'
             ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
             : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
@@ -3306,6 +3310,30 @@
 
     // Lets the panel paint before a long synchronous step. A hidden tab never fires
     // requestAnimationFrame, so a timer also resolves it (the export must not stall there).
+    // One line that says which private viewer fields were found. The export reads them
+    // through && chains that give "nothing" when a field is gone, so after a viewer update
+    // this line in a bug report shows what disappeared.
+    function logViewerCapabilities() {
+        try {
+            const all = window.allmodel || [];
+            let rig = 0, pal = 0, matModel = 0, chMap = 0, morph = 0;
+            all.forEach((obj) => {
+                const impl = obj && obj._rigTransformImplementation;
+                if (impl) { rig++; if (impl._skinningAttribute && impl._skinningAttribute._matrixPalette) pal++; }
+                const ch = getMaterialChannels(obj);
+                if (ch) { matModel++; if (ch.__map) chMap++; }
+                try { if (morphTargetCount(obj)) morph++; } catch (e) {}
+            });
+            const mgr = findAnimationManager();
+            let speed = '';
+            if (mgr) { try { speed = `, speed x${typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor}`; } catch (e) {} }
+            log(`viewer: meshes ${all.length}, skinned ${rig} (palette ${pal}/${rig}), morph ${morph}, ` +
+                `material model ${matModel}/${all.length} (channel map ${chMap}/${matModel}), textures seen ${Object.keys(saveimagecache2).length}, ` +
+                `clip manager ${mgr ? `yes (${getClipCount()} clips, ${getClipItems().length} list items${speed})` : 'no'}, ` +
+                `model name label ${document.getElementsByClassName('model-name__label').length ? 'yes' : 'no'}`);
+        } catch (e) { warn('viewer capability check failed:', e.message); }
+    }
+
     function nextPaint() {
         return new Promise((r) => {
             let done = false;
@@ -4633,8 +4661,12 @@
                 if (n.children && n.children.length === 0) delete n.children;
             });
 
+            // With "Vertex color sRGB>linear" off, COLOR_0 holds the viewer's sRGB values as they are.
+            // The flag tells FbxWriter (and anyone reading the file) not to encode them again.
+            const asset = { version: '2.0' };
+            if (!CONFIG.VERTEX_COLOR_SRGB) asset.extras = { vertexColorSpace: 'srgb' };
             const gltf = {
-                asset: { version: '2.0' },
+                asset,
                 scene: 0,
                 scenes: [{ nodes: rootNodes }],
                 nodes,
@@ -5050,6 +5082,7 @@
             let lastYield = Date.now();
             const yieldUI = () => (Date.now() - lastYield > 40 ? new Promise((r) => setTimeout(() => { lastYield = Date.now(); r(); }, 0)) : null);
             const fps = opts.fps || 30;
+            const colorsAreSrgb = !!(gltf.asset && gltf.asset.extras && gltf.asset.extras.vertexColorSpace === 'srgb');
             const read = makeReader(gltf, bin);
             const warnings = [];
             const nodes = gltf.nodes || [];
@@ -5336,9 +5369,14 @@
                 if (hasUV0) uvLayer(uv0, 0, 'UVMap');
                 if (hasUV1) uvLayer(uv1, 1, 'UVMap2');
                 if (hasC) {
-                    // glTF COLOR_0 is linear; FBX apps treat vertex colours as sRGB
+                    // glTF COLOR_0 is linear; FBX apps treat vertex colours as sRGB. A file that says
+                    // its colours are already sRGB (asset.extras.vertexColorSpace) is written as is.
                     const l2s = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
-                    for (let k = 0; k < col.length; k++) if (k % 4 !== 3) col[k] = l2s(Math.min(1, Math.max(0, col[k])));
+                    for (let k = 0; k < col.length; k++) {
+                        if (k % 4 === 3) continue;
+                        const v = Math.min(1, Math.max(0, col[k]));
+                        col[k] = colorsAreSrgb ? v : l2s(v);
+                    }
                     kids.push(node('LayerElementColor', [P.I(0)], [
                         node('Version', [P.I(101)]), node('Name', [P.S('Col')]),
                         node('MappingInformationType', [P.S('ByPolygonVertex')]),
@@ -5771,6 +5809,21 @@
     };
 
     const patchedSrc = {};
+    // Patch ids applied in any bundle so far. A working load applies all five
+    // (spread over two bundles, NOTES section 8); missing ones are reported once.
+    const PATCH_IDS = ['patch_0', 'patch_1', 'patch_2', 'patch_3', 'patch_4'];
+    const PATCH_ROLE = {
+        patch_0: 'texture readback (renderInto)', patch_1: 'texture readback (image_data)',
+        patch_2: 'texture readback (drawhookimg)', patch_3: 'texture names (drawhookcanvas)', patch_4: 'meshes (attachbody)',
+    };
+    const _patchesApplied = {};
+    function reportMissingPatches() {
+        if (!window._anyAnchorsMatched) return;   // nothing matched: the 8 s hint and the reload handle it
+        const miss = PATCH_IDS.filter((id) => !_patchesApplied[id]);
+        if (!miss.length) { log('all viewer patches applied'); return; }
+        warn('viewer patches missing: ' + miss.map((id) => `${id} (${PATCH_ROLE[id]})`).join(', ') +
+             '. The viewer was probably updated; that part of the export will be empty.');
+    }
 
     window.onbeforescriptexecute = (e) => {
         // Only handle the script that triggered the event, and each bundle URL once.
@@ -5822,16 +5875,25 @@
         }
 
         if (applied.length) {
+            applied.forEach((id) => { _patchesApplied[id] = true; });
             window._anyAnchorsMatched = true;
             try { sessionStorage.removeItem('ripper_reloaded'); } catch (e) {}
             log('patched', src.split('/').pop(), '→', applied.join(','));
         }
 
+        // The sentinel at the end proves the patched copy ran to the end. An inline
+        // script runs during appendChild, so it can be checked right after. If the
+        // page blocks inline scripts (CSP) or the bundle throws, it stays unset.
+        const runKey = src.split('/').pop();
+        window.__ripperRan = window.__ripperRan || {};
         const s = document.createElement('script');
         s.__ripperOwn = true;
         s.type = 'text/javascript';
-        s.text = js;
+        s.text = js + `\n;window.__ripperRan[${JSON.stringify(runKey)}]=1;`;
         (document.head || document.getElementsByTagName('head')[0]).appendChild(s);
+        if (!window.__ripperRan[runKey]) {
+            err(`patched bundle did not run to the end: ${runKey}. The page may block inline scripts (CSP), or the bundle threw (see the error above). The viewer may not load.`);
+        }
     };
 
     (function kickoff() {

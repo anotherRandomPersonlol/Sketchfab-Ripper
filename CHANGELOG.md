@@ -9,8 +9,11 @@
 - Clip recording follows the viewer's playback speed (x0.1, x0.5, x2). Before, at x0.5 or x0.1 the recording ended too early. The exported clip always plays at normal speed, so a slow speed gives more frames per second of animation (with Record FPS set to Max).
 - An export started in a background tab no longer stops at "Building scene" until you open the tab again.
 - If one metal, roughness or gloss image cannot be decoded, the other maps of that material are still merged.
+- With **Vertex color sRGB>linear** off, FBX vertex colours are no longer converted to sRGB a second time (they were too bright). The GLB marks such colours with `asset.extras.vertexColorSpace: "srgb"`.
 
 ### Changed
+- The console log reports viewer patches that did not apply, and an error when the patched viewer code did not run (for example, when the page blocks inline scripts). At export start, one line lists which viewer data was found. These lines help with bug reports after a Sketchfab update.
+- The script header asks the userscript manager to run the script in the page (`@inject-into page`, `@sandbox JavaScript`). Greasemonkey 4 is not supported.
 - An FBX export no longer builds the GLB file it does not use (less memory on large models).
 - The console log shows more settings changes, and a warning when the settings cannot be saved (for example, in a private window).
 - Code cleanup: unused code and duplicate helpers removed, outdated comments and notes corrected.
