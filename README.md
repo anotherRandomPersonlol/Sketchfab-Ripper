@@ -1,5 +1,11 @@
 # Sketchfab Ripper
 
+[![Greasy Fork installs](https://img.shields.io/greasyfork/dt/600578?label=Greasy%20Fork%20installs&color=670000)](https://greasyfork.org/en/scripts/600578-sketchfab-ripper)
+[![Greasy Fork version](https://img.shields.io/greasyfork/v/600578?label=version)](https://greasyfork.org/en/scripts/600578-sketchfab-ripper)
+[![Greasy Fork rating](https://img.shields.io/greasyfork/rating-count/600578?label=rating)](https://greasyfork.org/en/scripts/600578-sketchfab-ripper/feedback)
+[![GitHub release downloads](https://img.shields.io/github/downloads/anotherRandomPersonlol/Sketchfab-Ripper/total?label=GitHub%20release%20downloads)](https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/releases)
+[![License: MIT](https://img.shields.io/github/license/anotherRandomPersonlol/Sketchfab-Ripper)](LICENSE)
+
 ![Sketchfab Ripper: four exported models rendered in Blender](docs/social-preview.png)
 
 > **For personal archival and educational use only.**
