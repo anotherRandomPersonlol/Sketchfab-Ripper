@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- RECORD ALL CLIPS that ends with one recorded clip (for example, cancelled after the first clip) now exports that clip. Before, the export had no animation.
+- After a language change, you can drag the panel again.
+- A cancelled RECORD ALL CLIPS now shows "Recording cancelled". When the clip list cannot be read, it shows "Recording failed" instead of "Recorded 0 clips".
+- An export started in a background tab no longer stops at "Building scene" until you open the tab again.
+- If one metal, roughness or gloss image cannot be decoded, the other maps of that material are still merged.
+
+### Changed
+- An FBX export no longer builds the GLB file it does not use (less memory on large models).
+- The console log shows more settings changes, and a warning when the settings cannot be saved (for example, in a private window).
+- Code cleanup: unused code and duplicate helpers removed, outdated comments and notes corrected.
+
 ## v1.6.0
 
 ### New

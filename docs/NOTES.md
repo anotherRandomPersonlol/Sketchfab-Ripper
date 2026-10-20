@@ -84,7 +84,7 @@ much harder than the palette path we used.
 - skel_root = W_mesh (mesh's world matrix via getMatrix chain)
 - IBM = identity
 - Recorder reads palette + world per frame
-- Export: row-major expandMat3x4, quaternion hemisphere fix
+- Export: row-major palette to 4x4 (now `palMat4`), quaternion hemisphere fix
 
 ### 10. Gotchas learned the hard way
 - MutationObserver scope matters. Watching `document.head` only
@@ -95,8 +95,9 @@ much harder than the palette path we used.
   Many webpack chunks go into body.
 - readPixels per-frame freezes the viewer. Guard with
   `if (saveimagecache2[url].dataURL) return`.
-- Sketchfab is an SPA. Clear `window.allmodel` when model-name
-  label changes, or you accumulate duplicates.
+- Sketchfab is an SPA. `window.allmodel` should be cleared when the model-name
+  label changes, or duplicates accumulate. Not done yet: the code never clears it
+  (open item #1, model-switch reset).
 
 ## Animation clips and rest pose (added Oct 2026)
 
@@ -163,7 +164,6 @@ once after 12 s). With zero meshes in the panel, patch_4 did not fire.
 ### 16. Fixed gotchas (do NOT regress)
 - The MutationObserver must watch `document`, not `document.head`.
 - Guard per-frame pixel reads: `if (saveimagecache2[url].dataURL) return;`
-- Sketchfab is an SPA. Clear `window.allmodel` when the model changes.
 - The viewer runs in an iframe (URL contains `/embed`). Never add a
   top-frame-only guard.
 - Vertex transform glTF evaluates: `worldVertex = YUP * W_mesh * palette[i] * restVertex`
@@ -392,7 +392,7 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 - Girl face confirmed much better (8 sheared joints per body skin now stored via helper nodes; residual max 2.3% before the fix path,
   "only slightly noticeable"); Patriot fine.
 - New setting "Record FPS" (`RECORD_FPS`, 0 = every rendered frame (default, unchanged behaviour), 60/30/24/15). `fpsDue()` throttles both the
-  clip recorder and the manual RECORD loop. The old `CLIP_FPS` key stays only so saved settings still load (it was never applied).
+  clip recorder and the manual RECORD loop. (The old `CLIP_FPS` key was removed later; `loadConfig` ignores unknown saved keys.)
 - Hidden tab: a `visibilitychange` listener warns when the tab is hidden during any recording (rAF pauses, frames skipped / clip truncated);
   README lists it under known limitations.
 
