@@ -2302,18 +2302,9 @@
             if (!ref) return null;
             const W = ref.width, H = ref.height;
 
-            function readGray(bmp) {
-                const c = document.createElement('canvas');
-                c.width = W; c.height = H;
-                const x = c.getContext('2d');
-                x.drawImage(bmp, 0, 0, W, H);
-                const px = x.getImageData(0, 0, W, H).data;
-                c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
-                return px;
-            }
-            const mData = mBmp ? readGray(mBmp) : null;
-            const rData = rBmp ? readGray(rBmp) : null;
-            const gData = gBmp ? readGray(gBmp) : null;
+            const mData = mBmp ? bitmapPixels(mBmp, W, H) : null;
+            const rData = rBmp ? bitmapPixels(rBmp, W, H) : null;
+            const gData = gBmp ? bitmapPixels(gBmp, W, H) : null;
 
             const out = new Uint8ClampedArray(W * H * 4);
             for (let p = 0; p < W * H; p++) {
@@ -2348,13 +2339,10 @@
         const tick = () => { done++; if (onJob) onJob(done, jobs.length); };
         const seen = {};
         window.allmodel.forEach((obj, i) => {
-            const ss = obj.stateset;
-            const meshName = obj._name
-                         || (ss && ss._name)
-                         || (`mesh_${i}`);
+            const mName = meshName(obj, i);
             const cm = getChannelTextureMap(obj);
             if (!cm.MetalnessPBR && !cm.RoughnessPBR && !cm.GlossinessPBR) return;
-            const san = sanitizeTextureName(meshName);
+            const san = sanitizeTextureName(mName);
             if (seen[san]) return;
             seen[san] = true;
             jobs.push(
@@ -2369,9 +2357,9 @@
                         hasM: result.hasM,
                         hasR: result.hasR
                     };
-                    log('merged MR:', meshName, '→', fname, `${result.blob.size}B`);
+                    log('merged MR:', mName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
-                    warn('MR merge failed for', meshName, e.message);
+                    warn('MR merge failed for', mName, e.message);
                 }).then(tick)
             );
         });
@@ -2431,16 +2419,8 @@
         return Promise.all([noColor ? null : createImageBitmap(colorBlob), createImageBitmap(maskBlob)]).then((bmps) => {
             const mBmp = bmps[1], cBmp = bmps[0] || mBmp;
             const W = cBmp.width, H = cBmp.height;
-            function readPixels(bmp) {
-                const c = document.createElement('canvas');
-                c.width = W; c.height = H;
-                const x = c.getContext('2d');
-                x.drawImage(bmp, 0, 0, W, H);   // the mask is scaled to the color size
-                const px = x.getImageData(0, 0, W, H).data;
-                c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
-                return px;
-            }
-            const cData = noColor ? null : readPixels(cBmp), mData = readPixels(mBmp);
+            // the mask is scaled to the color size
+            const cData = noColor ? null : bitmapPixels(cBmp, W, H), mData = bitmapPixels(mBmp, W, H);
             const out = new Uint8ClampedArray(W * H * 4);
             for (let p = 0; p < W * H; p++) {
                 const q = p * 4;
@@ -2476,8 +2456,7 @@
         const jobs = [];
         const seen = {};
         window.allmodel.forEach((obj, i) => {
-            const ss = obj.stateset;
-            const meshName = obj._name || (ss && ss._name) || (`mesh_${i}`);
+            const mName = meshName(obj, i);
             const cm = getChannelTextureMap(obj);
             const opSrc = opacitySource(cm);
             if (!opSrc || !(opSrc.url || opSrc.name) || opSrc.atlas) return;
@@ -2485,7 +2464,7 @@
             const isOpacity = opSrc === cm.Opacity;
             const opCh = mch && (isOpacity ? mch.Opacity : mch.AlphaMask);
             if (opCh && opCh.enable === false) return;   // texture present but the channel is switched off in the viewer
-            const san = sanitizeTextureName(meshName);
+            const san = sanitizeTextureName(mName);
             if (seen[san]) return;
             seen[san] = true;
             // Opacity channel of a cutout type behaves like a mask (MASK), blend types use BLEND.
@@ -2495,12 +2474,12 @@
                 _opacityNoColor[san] = true;   // opacity image only: merge into a white RGB + alpha texture
             } else if (normalizeUrl(opSrc.url) === normalizeUrl(cm.AlbedoPBR.url)) {
                 _opacityOneFile[san] = true;
-                log(`opacity merge: ${meshName} uses one file for color and opacity, skipped`);
+                log(`opacity merge: ${mName} uses one file for color and opacity, skipped`);
                 return;
             }
             // Meshes sharing the same colour and mask images share one merged texture.
             const okey = `${_opacityNoColor[san] ? 'white' : normalizeUrl(cm.AlbedoPBR.url)}|${normalizeUrl(opSrc.url)}`;
-            if (_alphaFirst[okey]) { _alphaShare[san] = _alphaFirst[okey]; log(`opacity merge: ${meshName} shares the merged texture of ${_alphaFirst[okey]}`); return; }
+            if (_alphaFirst[okey]) { _alphaShare[san] = _alphaFirst[okey]; log(`opacity merge: ${mName} shares the merged texture of ${_alphaFirst[okey]}`); return; }
             _alphaFirst[okey] = san;
             jobs.push(
                 _mergeOneOpacity(cm).then((result) => {
@@ -2512,9 +2491,9 @@
                         fileExt: result.ext,
                         dataURL: 'merged'
                     };
-                    log('merged opacity:', meshName, '→', fname, `${result.blob.size}B`);
+                    log('merged opacity:', mName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
-                    warn('opacity merge failed for', meshName, e.message);
+                    warn('opacity merge failed for', mName, e.message);
                 }).then(tick)
             );
         });
@@ -2736,17 +2715,527 @@
         return remap[rootIdx];
     }
 
+    function pad4(o) { return o % 4 ? o + (4 - o % 4) : o; }
+
+    // Display name of a captured mesh: its own name, its stateset name, or mesh_<index>.
+    function meshName(obj, i) { return obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${i}`); }
+
+    // Model name from the viewer page, or 'model'.
+    function modelBaseName() {
+        const ml = document.getElementsByClassName('model-name__label')[0];
+        return ml ? ml.textContent.trim().replace(/\.+$/, '') : 'model';
+    }
+
+    // RGBA pixels of a bitmap drawn at W x H (scaled). Frees the bitmap and the canvas.
+    function bitmapPixels(bmp, W, H) {
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        x.drawImage(bmp, 0, 0, W, H);
+        const px = x.getImageData(0, 0, W, H).data;
+        c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
+        return px;
+    }
+
+    // Vertex colors (Sketchfab "Color" attribute). Uint8 RGBA is written as a
+    // normalized UNSIGNED_BYTE VEC4; float RGBA as FLOAT VEC4; RGB is widened
+    // to float VEC3 (3-byte ubyte elements are not 4-byte aligned in glTF).
+    // Returns the COLOR_0 accessor (its data already added with addBV), or null.
+    function vertexColorAccessor(colArr, vc, nm, addBV) {
+        let acc = null;
+        if (colArr && colArr.length) {
+            const isU8 = (colArr instanceof Uint8Array || colArr instanceof Uint8ClampedArray);
+            const conv = !!CONFIG.VERTEX_COLOR_SRGB;
+            const cStride = (colArr.length === vc * 4) ? 4 : ((colArr.length === vc * 3) ? 3 : 0);
+            if (cStride && !conv && cStride === 4) {
+                if (isU8) {
+                    acc = { bufferView: addBV(new Uint8Array(colArr), 34962), componentType: 5121,
+                            normalized: true, count: vc, type: 'VEC4' };
+                } else {
+                    acc = { bufferView: addBV(new Float32Array(colArr), 34962), componentType: 5126,
+                            count: vc, type: 'VEC4' };
+                }
+                log('vertex colors:', nm, isU8 ? '(RGBA8)' : '(RGBA float)');
+            } else if (cStride) {
+                // Float output (RGB widened since 3-byte ubyte elements are not 4-byte
+                // aligned). With VERTEX_COLOR_SRGB the RGB channels go sRGB -> linear.
+                const cf = new Float32Array(colArr.length);
+                for (let cfi = 0; cfi < cf.length; cfi++) {
+                    let cv = isU8 ? colArr[cfi] / 255 : colArr[cfi];
+                    if (conv && (cStride === 3 || cfi % 4 !== 3)) {
+                        cv = (cv <= 0.04045) ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+                    }
+                    cf[cfi] = cv;
+                }
+                acc = { bufferView: addBV(cf, 34962), componentType: 5126, count: vc, type: cStride === 4 ? 'VEC4' : 'VEC3' };
+                log('vertex colors:', nm, cStride === 4 ? '(RGBA)' : '(RGB)', conv ? 'sRGB->linear' : 'as is');
+            } else {
+                warn('vertex colors: unexpected length', colArr.length, 'for', vc, 'vertices on', nm, ', skipped');
+            }
+        }
+        return acc;
+    }
+
+    // One index primitive (mode 4 list, 5 strip, 6 fan) as a TRIANGLES index list. Drops degenerate
+    // triangles (strip joins) and restart / out-of-range indices; with DROP_STRIP_SLIVERS also the
+    // bridging sliver triangles of strips (logged). Returns null for points and lines.
+    function primitiveTriangles(pm, pi2, vertex, vc, nm) {
+        let tl = [], t2;
+        // Degenerate triangles (repeated index) are strip joins; drop them so
+        // Blender does not show long zero-area edges between distant vertices.
+        let oobN = 0, degN = 0, tpos = [];
+        function addTri(a, b, c) {
+            if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) { tl.push(a, b, c); tpos.push(t2); }
+            else if (a >= vc || b >= vc || c >= vc) oobN++;
+            else degN++;
+        }
+        // An index >= vertex count (WebGL2 primitive restart value 65535 / 4294967295) ends a
+        // strip or fan: restart the winding parity after it instead of treating it as a vertex.
+        let rs = 0;
+        if (pm === 4) {
+            for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) addTri(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]);
+        } else if (pm === 5) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
+                if (t2 - rs < 2) continue;
+                if ((t2 - rs) % 2 === 0) addTri(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
+                else addTri(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
+            }
+        } else if (pm === 6) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
+                if (t2 - rs < 2) continue;
+                addTri(pi2[rs], pi2[t2 - 1], pi2[t2]);
+            }
+        } else return null;   // points or lines
+        // Diagnostic for stray long thin triangles ("stripes"): flag triangles whose longest edge is
+        // far above the typical edge of this mesh and print where they come from in the index list.
+        if (tl.length) (() => {
+            let vv = vertex, nT = tl.length / 3, q, lens = [], mn = [1e30, 1e30, 1e30], mx = [-1e30, -1e30, -1e30];
+            function el(i, j) { const dx = vv[i * 3] - vv[j * 3], dy = vv[i * 3 + 1] - vv[j * 3 + 1], dz = vv[i * 3 + 2] - vv[j * 3 + 2]; return Math.sqrt(dx * dx + dy * dy + dz * dz); }
+            for (q = 0; q < vc; q++) for (let ax = 0; ax < 3; ax++) { const cv = vv[q * 3 + ax]; if (cv < mn[ax]) mn[ax] = cv; if (cv > mx[ax]) mx[ax] = cv; }
+            const size = Math.sqrt(Math.pow(mx[0] - mn[0], 2) + Math.pow(mx[1] - mn[1], 2) + Math.pow(mx[2] - mn[2], 2));
+            const step = Math.max(1, Math.floor(nT / 2000));
+            for (q = 0; q < nT; q += step) lens.push(Math.max(el(tl[q * 3], tl[q * 3 + 1]), el(tl[q * 3 + 1], tl[q * 3 + 2]), el(tl[q * 3], tl[q * 3 + 2])));
+            lens.sort((a, b) => a - b);
+            let med = lens[lens.length >> 1] || 0, lim = Math.max(20 * med, 0.05 * size), hits = 0, shown = 0, drop = {}, nDrop = 0, cand = [];
+            for (q = 0; q < nT; q++) {
+                const a0 = tl[q * 3], b0 = tl[q * 3 + 1], c0 = tl[q * 3 + 2];
+                const L = Math.max(el(a0, b0), el(b0, c0), el(a0, c0));
+                if (!(L > lim)) continue;
+                hits++;
+                // Bridging triangle of a strip join without repeated vertices: very long and almost no width.
+                const ux = vv[b0 * 3] - vv[a0 * 3], uy = vv[b0 * 3 + 1] - vv[a0 * 3 + 1], uz = vv[b0 * 3 + 2] - vv[a0 * 3 + 2];
+                const wx = vv[c0 * 3] - vv[a0 * 3], wy = vv[c0 * 3 + 1] - vv[a0 * 3 + 1], wz = vv[c0 * 3 + 2] - vv[a0 * 3 + 2];
+                const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
+                const height = Math.sqrt(cx * cx + cy * cy + cz * cz) / L;   // 2*area / longest edge
+                if (CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) cand.push(q);
+                if (shown < 3 && CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) {
+                    shown++;
+                    const at = tpos[q], ctx = [];
+                    for (let ci = Math.max(0, at - 5); ci <= Math.min(pi2.length - 1, at + 3); ci++) ctx.push((ci === at ? '*' : '') + pi2[ci]);
+                    log('long triangle:', nm, `mode ${pm}`, 'tri (' + a0 + ',' + b0 + ',' + c0 + ') longest edge ' + L.toFixed(3) +
+                        ' (typical ' + med.toFixed(4) + ', mesh size ' + size.toFixed(3) + ') at index ' + at + ' of ' + pi2.length + ', indices around: ' + ctx.join(' '));
+                }
+            }
+            // A bridging triangle spans a gap: one of its long edges is used by no other triangle
+            // (vertices welded by position). Long thin tubes/rods share every long edge, so they stay.
+            if (cand.length) {
+                let qs = Math.max(size * 1e-6, 1e-9), wmap = {}, wid = new Int32Array(vc), nw = 0, vi;
+                for (vi = 0; vi < vc; vi++) {
+                    const wk = `${Math.round(vv[vi * 3] / qs)},${Math.round(vv[vi * 3 + 1] / qs)},${Math.round(vv[vi * 3 + 2] / qs)}`;
+                    if (wmap[wk] === undefined) wmap[wk] = nw++;
+                    wid[vi] = wmap[wk];
+                }
+                const ek = (i, j) => { const a1 = wid[i], b1 = wid[j]; return a1 < b1 ? `${a1}_${b1}` : `${b1}_${a1}`; };
+                let ecount = {}, ci2, e3;
+                for (ci2 = 0; ci2 < cand.length; ci2++) {
+                    const cq = cand[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
+                    for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > lim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
+                }
+                for (q = 0; q < nT; q++) for (e3 = 0; e3 < 3; e3++) {
+                    const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
+                    if (ecount[k3] !== undefined) ecount[k3]++;
+                }
+                // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
+                // grass, hair strip) does not, so it stays.
+                const isCand = {}, onReal = new Uint8Array(nw);
+                for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
+                for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
+                for (ci2 = 0; ci2 < cand.length; ci2++) {
+                    let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
+                    for (e3 = 0; e3 < 3; e3++) {
+                        const ka = ek(cw[e3], cw[(e3 + 1) % 3]);
+                        if (ecount[ka] === 1 && onReal[wid[cw[e3]]] && onReal[wid[cw[(e3 + 1) % 3]]]) open = true;
+                    }
+                    if (open) { drop[cq2] = true; nDrop++; }
+                }
+            }
+            if (nDrop) {
+                const kept = [];
+                for (q = 0; q < nT; q++) if (!drop[q]) kept.push(tl[q * 3], tl[q * 3 + 1], tl[q * 3 + 2]);
+                tl = kept;
+                log(`mesh ${nm}: dropped ${nDrop} bridging sliver triangle(s) from the strip (stripes)`);
+            }
+            if (hits > nDrop) log(`mesh ${nm}: ${hits - nDrop} long thin triangle(s) kept (real geometry, edges shared)`);
+        })();
+        if (oobN) log('indices:', nm, `mode ${pm}`, `${pi2.length} indices ->`, `${tl.length / 3} triangles, restart/out-of-range ${oobN}, degenerate ${degN}, vertices ${vc}`);
+        return tl;
+    }
+
+    // Morph target accessors of one mesh (POSITION and NORMAL deltas). The viewer blends
+    // (1 - sum w) * base + sum w_k * target_k with absolute targets, which equals glTF's
+    // base + sum w_k * (target_k - base).
+    function morphTargetAccessors(obj, mdl, vc, nm, accs, addBV) {
+        const morphTargets = [], mAttr = obj._attributes || {};
+        function morphEls(a) {
+            const b = a && (a._initialBufferArray || a._bufferArray);
+            return (b && b._elements) || (a && a._elements) || null;
+        }
+        for (let mk = 0, mN = morphTargetCount(obj); mk < mN; mk++) {
+            const tv = morphEls(mAttr[`Vertex_${mk}`]);
+            if (!tv || tv.length !== mdl.vertex.length) {
+                warn('morph target', mk, 'of', nm, 'skipped (vertex data missing or wrong size)');
+                continue;
+            }
+            const dv = new Float32Array(tv.length), dMin = [Infinity, Infinity, Infinity], dMax = [-Infinity, -Infinity, -Infinity];
+            for (let di = 0; di < tv.length; di++) {
+                const dd = tv[di] - mdl.vertex[di];
+                dv[di] = dd;
+                const dax = di % 3;
+                if (dd < dMin[dax]) dMin[dax] = dd;
+                if (dd > dMax[dax]) dMax[dax] = dd;
+            }
+            const tgt = { POSITION: accs.length };
+            accs.push({ bufferView: addBV(dv, 34962), componentType: 5126, count: vc,
+                        type: 'VEC3', min: dMin, max: dMax });
+            let tn = morphEls(mAttr[`Normal_${mk}`]);
+            if (tn && mdl.normal.length && tn.length === mdl.normal.length) {
+                tn = unitNormals(tn);
+                const dn = new Float32Array(tn.length);
+                for (let dni = 0; dni < tn.length; dni++) dn[dni] = tn[dni] - mdl.normal[dni];
+                tgt.NORMAL = accs.length;
+                accs.push({ bufferView: addBV(dn, 34962), componentType: 5126, count: vc, type: 'VEC3' });
+            }
+            morphTargets.push(tgt);
+        }
+        return morphTargets;
+    }
+
+    // Every captured texture with a file, under an ASCII-safe unique name, indexed by URL and by name.
+    function buildTexturePool() {
+        let images = [], textures = [], imageKeys = [], usedSafe = {};
+        const textureUrlToIndex  = {};
+        const textureNameToIndex = {};
+        for (let key in saveimagecache2) {
+            if (!saveimagecache2.hasOwnProperty(key)) continue;
+            const t = saveimagecache2[key];
+            if (!t || !t.dataURL) continue;
+            const ext = t.fileExt || '.png';
+            if (!objects[(t.name || 'texture') + ext]) { warn(`texture file missing, not referenced: ${t.name || 'texture'}${ext}`); continue; }
+            // ASCII-safe file name: no encoding issues in URIs or zip loaders.
+            const safeBase = String(t.name || 'texture').replace(/[^A-Za-z0-9._-]+/g, '_') || 'texture';
+            let safeName = safeBase + ext, sc = 1;
+            while (usedSafe[safeName.toLowerCase()]) safeName = `${safeBase}_${sc++}${ext}`;   // case-insensitive file systems
+            usedSafe[safeName.toLowerCase()] = true;
+            const path = `textures/${safeName}`;
+            const ii = images.length;
+            imageKeys.push({ key: (t.name || 'texture') + ext, safe: safeName });
+            images.push({ uri: path });
+            textures.push({ source: ii });
+            const nu = normalizeUrl(key);
+            if (nu) textureUrlToIndex[nu] = ii;
+            const sn = sanitizeTextureName(t.name);
+            if (sn) textureNameToIndex[sn] = ii;
+        }
+        return { images, textures, imageKeys, textureUrlToIndex, textureNameToIndex };
+    }
+
+    // Keeps only the textures some material uses and renumbers the material references.
+    // zipTex: captured file name -> file name in the zip.
+    function pruneUnusedTextures(mats, images, textures, imageKeys) {
+        // Drop textures no material references (captured env/matcap/leftover images) and remap indices.
+        const texUsed = {}, texNew = {}, keptImages = [], keptTextures = [], zipTex = {};
+        function markTex(o) { if (o && typeof o.index === 'number') texUsed[o.index] = true; }
+        mats.forEach((m) => {
+            const pb = m.pbrMetallicRoughness || {};
+            markTex(pb.baseColorTexture); markTex(pb.metallicRoughnessTexture);
+            markTex(m.normalTexture); markTex(m.occlusionTexture); markTex(m.emissiveTexture);
+        });
+        for (let ti2 = 0; ti2 < textures.length; ti2++) {
+            if (!texUsed[ti2]) continue;
+            texNew[ti2] = keptTextures.length;
+            keptImages.push({ uri: images[textures[ti2].source].uri });
+            keptTextures.push({ source: keptImages.length - 1 });
+            zipTex[imageKeys[textures[ti2].source].key] = imageKeys[textures[ti2].source].safe;
+        }
+        function remapTex(o) { if (o && typeof o.index === 'number') o.index = texNew[o.index]; }
+        mats.forEach((m) => {
+            const pb = m.pbrMetallicRoughness || {};
+            remapTex(pb.baseColorTexture); remapTex(pb.metallicRoughnessTexture);
+            remapTex(m.normalTexture); remapTex(m.occlusionTexture); remapTex(m.emissiveTexture);
+        });
+        if (keptTextures.length !== textures.length) log(`textures: ${keptTextures.length} used, ${textures.length - keptTextures.length} unused dropped`);
+        return { images: keptImages, textures: keptTextures, zipTex };
+    }
+
+    // GLB container: 12-byte header, JSON chunk (space padded), BIN chunk (zero padded).
+    function packGlb(gltf, binAll) {
+        const jsonStr = JSON.stringify(gltf);
+        const jsonBytes = new TextEncoder().encode(jsonStr);
+        const jAl = pad4(jsonBytes.byteLength), jPad = jAl - jsonBytes.byteLength;
+        const bin = binAll.buffer;
+        const bAl = pad4(bin.byteLength), bPad = bAl - bin.byteLength;
+        const total = 12 + 8 + jAl + 8 + bAl;
+
+        const glb = new ArrayBuffer(total);
+        let dv = new DataView(glb), o = 0;
+        dv.setUint32(o, 0x46546C67, true); o += 4;
+        dv.setUint32(o, 2, true); o += 4;
+        dv.setUint32(o, total, true); o += 4;
+        dv.setUint32(o, jAl, true); o += 4;
+        dv.setUint32(o, 0x4E4F534A, true); o += 4;
+        new Uint8Array(glb, o, jsonBytes.length).set(jsonBytes); o += jsonBytes.length;
+        for (let k1 = 0; k1 < jPad; k1++) new Uint8Array(glb, o + k1, 1)[0] = 0x20;
+        o += jPad;
+        dv.setUint32(o, bAl, true); o += 4;
+        dv.setUint32(o, 0x004E4942, true); o += 4;
+        new Uint8Array(glb, o, bin.byteLength).set(new Uint8Array(bin)); o += bin.byteLength;
+        for (let k2 = 0; k2 < bPad; k2++) new Uint8Array(glb, o + k2, 1)[0] = 0;
+        return glb;
+    }
+
+    // The recorded clips to export: every clip of RECORD ALL CLIPS, or the single recording.
+    function collectClipSets() {
+        // RECORD ALL CLIPS fills window.clips (and clears recordedFrames), so even one
+        // clip from it (cancelled after the first) must come from window.clips.
+        let clipSets = [];
+        if (window.clips && window.clips.length) {
+            window.clips.forEach((c) => {
+                if (c && c.frames && c.frames.length > 1) {
+                    clipSets.push({ name: c.name, frames: c.frames });
+                }
+            });
+        }
+        if (clipSets.length) {
+            log(`export: multi-clip mode, clips=${clipSets.length}`);
+        } else {
+            // single-clip path: same data source and behaviour as before
+            clipSets = (window.recordedFrames.length > 1)
+                ? [{ name: `${modelBaseName()}_anim`, frames: window.recordedFrames }] : [];
+        }
+        return clipSets;
+    }
+
+    // Material finishing: textures by channel (with the merged metal/rough and opacity maps), flat
+    // values from the viewer's material model for untextured channels, and the double-sided flag.
+    // pool: buildTexturePool(); matHasUV: mesh name -> the mesh has UVs.
+    function finishMaterials(mats, matsChannelInfo, matsFlat, matHasUV, pool) {
+        const textures = pool.textures, textureUrlToIndex = pool.textureUrlToIndex, textureNameToIndex = pool.textureNameToIndex;
+        function findTexIdx(info) {
+            if (!info) return undefined;
+            const u = normalizeUrl(info.url);
+            if (u && textureUrlToIndex[u] !== undefined) return textureUrlToIndex[u];
+            const n = sanitizeTextureName(info.name);
+            if (n && textureNameToIndex[n] !== undefined) return textureNameToIndex[n];
+            return undefined;
+        }
+
+        function flatEm(fl) {
+            const e = fl && fl.EmitColor;
+            const f = (e && typeof e.factor === 'number') ? e.factor : 1;
+            return Math.max(0, Math.min(1, f));
+        }
+
+        // Channels the viewer shows with a texture that did not make it into the export.
+        mats.forEach((m, mi) => {
+            const chan = matsChannelInfo[mi] || {};
+            (() => {
+                const fl = matsFlat[mi], mp = fl && fl.__map, lost = [], atl = [];
+                if (mp) for (let mk2 in mp) {
+                    if (!mp.hasOwnProperty(mk2) || !(mp[mk2] >= 0) || mk2 === 'Inspector' || mk2 === 'Matcap') continue;
+                    const inf = chan[mk2];
+                    if (!inf || inf.atlas || !(inf.url || inf.name)) { atl.push(mk2); continue; }
+                    if (findTexIdx(inf) === undefined) lost.push(mk2);
+                }
+                if (lost.length) warn(`material ${m.name}: channels with a texture in the viewer but not in the export: ${lost.join(', ')}`);
+                if (atl.length) log(`material ${m.name}: colour atlas / no image for ${atl.join(', ')}, using flat material values`);
+            })();
+        });
+        let anyRealTex = false;
+        for (let cmi in matsChannelInfo) {
+            if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
+            for (let ck in matsChannelInfo[cmi]) {
+                const ci = matsChannelInfo[cmi][ck];
+                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
+            }
+        }
+        if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
+
+        if (textures.length) {
+            mats.forEach((m, mi) => {
+                if (!matHasUV[m.name]) return;
+                const chan = matsChannelInfo[mi] || {};
+                let assigned = false;
+
+                const albedo = chan.AlbedoPBR || chan.DiffusePBR || chan.BaseColorPBR || chan.DiffuseColor;
+                const ai = findTexIdx(albedo);
+                if (ai !== undefined) {
+                    m.pbrMetallicRoughness.baseColorTexture = { index: ai };
+                    assigned = true;
+                }
+
+                const nrm = chan.NormalMap || chan.NormalPBR;
+                const ni = findTexIdx(nrm);
+                if (ni !== undefined) {
+                    m.normalTexture = { index: ni };
+                    assigned = true;
+                }
+
+                const ao = chan.AOPBR || chan.OcclusionPBR;
+                const oi = findTexIdx(ao);
+                if (oi !== undefined) {
+                    m.occlusionTexture = { index: oi };
+                    assigned = true;
+                }
+
+                const em = chan.EmissivePBR || chan.EmissionPBR || chan.EmitColor;
+                const ei = findTexIdx(em);
+                if (ei !== undefined) {
+                    m.emissiveTexture = { index: ei };
+                    // glTF multiplies the texture by emissiveFactor (default 0 = no emission).
+                    const emF = flatEm(matsFlat[mi]);
+                    m.emissiveFactor = [emF, emF, emF];
+                    assigned = true;
+                }
+
+                // Merged MR (see mergeMRTextures): registered in the
+                // pool under name "<sanitized mesh name>_MR".
+                const mrName = `${sanitizeTextureName(m.name)}_MR`;
+                const mrIdx = textureNameToIndex[mrName];
+                if (mrIdx !== undefined) {
+                    m.pbrMetallicRoughness.metallicRoughnessTexture = { index: mrIdx };
+                    assigned = true;
+                }
+
+                // Merged opacity (see mergeOpacityTextures): the RGBA texture
+                // replaces the plain base color and the material blends.
+                const alphaIdx = textureNameToIndex[`${_alphaShare[sanitizeTextureName(m.name)] || sanitizeTextureName(m.name)}_Alpha`];
+                if (alphaIdx !== undefined) {
+                    m.pbrMetallicRoughness.baseColorTexture = { index: alphaIdx };
+                    if (_opacityKind[sanitizeTextureName(m.name)] === 'alphamask') {
+                        m.alphaMode = 'MASK'; m.alphaCutoff = 0.5;
+                    } else {
+                        m.alphaMode = 'BLEND';
+                    }
+                    assigned = true;
+                    log(`material ${m.name}: alphaMode ${m.alphaMode} with merged ${_opacityKind[sanitizeTextureName(m.name)] || 'opacity'} texture`);
+                }
+
+                if (!assigned) {
+                    // No texture of this material was captured. Do not borrow texture 0
+                    // (an unrelated image); keep the plain material and say so.
+                    warn('material ' + m.name + ': no texture found in the capture pool, exported without textures'
+                         + (CONFIG.TEXTURE_WAIT_SECONDS ? '' : ' (texture wait is off)'));
+                }
+            });
+        }
+
+        // Flat material values for channels without a texture (texture-less models): base
+        // color, metalness, roughness, emission. Textured channels keep factor 1 so the
+        // texture alone decides, as before.
+        mats.forEach((m, mi) => {
+            const flat = matsFlat[mi], chan = matsChannelInfo[mi] || {}, pbr = m.pbrMetallicRoughness;
+            if (!flat) return;
+            const did = [];
+            const cmap = flat.__map;
+            function texd(n) {
+                // A channel counts as textured only when it has a real image (url or name) that is not
+                // the generated colour atlas; otherwise the flat material value is the best data we have.
+                const real = !!(chan[n] && (chan[n].url || chan[n].name) && !chan[n].atlas);
+                if (cmap && typeof cmap[n] === 'number') return cmap[n] >= 0 && real;
+                return real;
+            }
+            const chKeys = [];
+            for (let chk in chan) if (chan.hasOwnProperty(chk) && (chan[chk].url || chan[chk].name)) chKeys.push(chk);
+            const mapKeys = [];
+            if (cmap) for (let mpk in cmap) if (cmap.hasOwnProperty(mpk) && cmap[mpk] >= 0) mapKeys.push(`${mpk}=${cmap[mpk]}`);
+            log('material ' + m.name + ': texture channels [' + chKeys.join(',') + '] mapping [' + mapKeys.join(',') + ']' +
+                (pbr.baseColorTexture ? ' baseColorTexture set' : ' no baseColorTexture'));
+            const alb = flat.AlbedoPBR;
+            const alphaOnlyTex = !!_opacityNoColor[sanitizeTextureName(m.name)];
+            if (alb && alb.enable && (alb.color || typeof alb.factor === 'number') && (!pbr.baseColorTexture || alphaOnlyTex) && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
+                // No colour value means white scaled by the factor (factor 0 = black base, colour from emission only).
+                const af = (typeof alb.factor === 'number') ? alb.factor : 1, ac = alb.color || [1, 1, 1];
+                const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
+                pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
+                did.push('base color');
+            }
+            const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
+            // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
+            const mrE = saveimagecache2[`__merged_mr__:${sanitizeTextureName(m.name)}`], mrTex = !!pbr.metallicRoughnessTexture;
+            const mFlat = !texd('MetalnessPBR') && !(mrTex && mrE && mrE.hasM);
+            const rFlat = !texd('RoughnessPBR') && !(mrTex && mrE && mrE.hasR);
+            if (mrTex && !(mrE && mrE.hasM)) pbr.metallicFactor = 0;   // non-metal unless a flat value follows
+            if (mt && mt.enable && typeof mt.factor === 'number' && mFlat) {
+                pbr.metallicFactor = CONFIG.FLAT_MR_FROM_VIEWER ? mt.factor : 0; did.push('metalness');
+            }
+            if (rg && rg.enable && typeof rg.factor === 'number' && rFlat) {
+                pbr.roughnessFactor = CONFIG.FLAT_MR_FROM_VIEWER ? rg.factor : 0.5; did.push('roughness');
+            }
+            const op = flat.Opacity || flat.AlphaMask;
+            if (op && op.enable && pbr.baseColorTexture && !m.alphaMode && _opacityOneFile[sanitizeTextureName(m.name)]) {
+                const isBlend = !!flat.Opacity && /blend/i.test(String(op.type || ''));
+                m.alphaMode = isBlend ? 'BLEND' : 'MASK';
+                if (!isBlend) m.alphaCutoff = 0.5;
+                did.push(`opacity ${m.alphaMode} (${op.type})`);
+            }
+            // Opacity given as a plain value (no mask image): use it as base colour alpha.
+            const opf = flat.Opacity;
+            if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && typeof opf.factor === 'number' && opf.factor < 0.999) {
+                if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
+                pbr.baseColorFactor[3] = Math.max(0, Math.min(1, opf.factor));
+                m.alphaMode = 'BLEND';
+                did.push(`opacity ${pbr.baseColorFactor[3].toFixed(2)} (${opf.type})`);
+            }
+            if (mt && mt.enable === false && mFlat) {
+                pbr.metallicFactor = 0; did.push('metalness off');
+            }
+            const em = flat.EmitColor;
+            if (em && em.enable && em.color && !m.emissiveTexture && !texd('EmitColor')) {
+                const ef = (typeof em.factor === 'number') ? em.factor : 1;
+                const ev = [Math.min(1, em.color[0] * ef), Math.min(1, em.color[1] * ef), Math.min(1, em.color[2] * ef)];
+                if (ev[0] > 0 || ev[1] > 0 || ev[2] > 0) { m.emissiveFactor = ev; did.push('emission'); }
+            }
+            if (did.length) log(`material ${m.name}: flat values from material model (${did.join(', ')})`);
+        });
+
+        // Sketchfab can render a model two-sided (Inspector: Single Sided OFF), which glTF
+        // expresses per material. DOUBLE_SIDED marks all materials two-sided; with
+        // DOUBLE_SIDED_AUTO, materials the viewer draws single-sided (cullFace set) stay single-sided.
+        if (CONFIG.DOUBLE_SIDED) {
+            const singleNames = [];
+            mats.forEach((m, mi) => {
+                const cv = matsFlat[mi] ? matsFlat[mi].__cull : undefined;   // 1029 (GL_BACK) = Single Sided ON, 0 = OFF
+                const on = !(cv === undefined || cv === null || cv === 0 || cv === false || /^(none|0|false|off)?$/i.test(String(cv)));
+                if (CONFIG.DOUBLE_SIDED_AUTO && on) { singleNames.push(m.name); return; }
+                m.doubleSided = true;
+            });
+            log('materials marked doubleSided: ' + (mats.length - singleNames.length) + ' of ' + mats.length +
+                (singleNames.length ? ` (single sided in the viewer: ${singleNames.join(', ')})` : ''));
+        }
+    }
+
+    // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
     function _downloadGLBSync(skipGlb) {
         try {
-            function pad(o) { return o % 4 ? o + (4 - o % 4) : o; }
-
             const allNodes = window.allmodel;
             const nodeMap = new Map();
             const nodes = [];
 
             allNodes.forEach((obj, idx) => {
                 nodeMap.set(obj, idx);
-                const name = obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${idx}`);
+                const name = meshName(obj, idx);
                 const world = computeWorldMatrix(obj);
                 nodes.push({ name, matrix: world, mesh: undefined, children: [] });
             });
@@ -2763,7 +3252,7 @@
 
             function addBV(ta, target) {
                 const len = ta.byteLength;
-                const al = pad(off), padn = al - off;
+                const al = pad4(off), padn = al - off;
                 if (padn > 0) { binChunks.push(new Uint8Array(padn)); off += padn; }
                 const idx = bvs.length;
                 const bv = { buffer: 0, byteOffset: off, byteLength: len };
@@ -2779,14 +3268,14 @@
                 if (!obj._primitives) return;
                 const mdl = parseobj(obj);
                 if (!mdl.vertex || mdl.vertex.length === 0) return;
-                const nm = obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${mIdx}`);
+                const nm = meshName(obj, mIdx);
                 const vc = mdl.vertex.length / 3;
 
                 const twinIdx = wireOverlayTwin(allNodes, mIdx);
                 if (twinIdx >= 0) {
                     const twinObj = allNodes[twinIdx];
                     log('mesh ' + nm + ': skipped, it is the wireframe overlay (lines only) of "' +
-                        (twinObj._name || (twinObj.stateset && twinObj.stateset._name) || (`mesh_${twinIdx}`)) + '"');
+                        meshName(twinObj, twinIdx) + '"');
                     skippedNodes[mIdx] = true;
                     return;
                 }
@@ -2837,152 +3326,23 @@
                                 componentType: 5126, count: vc, type: 'VEC2' });
                     matHasUV[nm] = true;
                 }
-                // Vertex colors (Sketchfab "Color" attribute). Uint8 RGBA is written as a
-                // normalized UNSIGNED_BYTE VEC4; float RGBA as FLOAT VEC4; RGB is widened
-                // to float VEC3 (3-byte ubyte elements are not 4-byte aligned in glTF).
-                let aC = -1, colArr = mdl.color;
-                if (colArr && colArr.length) {
-                    const isU8 = (colArr instanceof Uint8Array || colArr instanceof Uint8ClampedArray);
-                    const conv = !!CONFIG.VERTEX_COLOR_SRGB;
-                    const cStride = (colArr.length === vc * 4) ? 4 : ((colArr.length === vc * 3) ? 3 : 0);
-                    if (cStride && !conv && cStride === 4) {
-                        aC = accs.length;
-                        if (isU8) {
-                            accs.push({ bufferView: addBV(new Uint8Array(colArr), 34962), componentType: 5121,
-                                        normalized: true, count: vc, type: 'VEC4' });
-                        } else {
-                            accs.push({ bufferView: addBV(new Float32Array(colArr), 34962), componentType: 5126,
-                                        count: vc, type: 'VEC4' });
-                        }
-                        log('vertex colors:', nm, isU8 ? '(RGBA8)' : '(RGBA float)');
-                    } else if (cStride) {
-                        // Float output (RGB widened since 3-byte ubyte elements are not 4-byte
-                        // aligned). With VERTEX_COLOR_SRGB the RGB channels go sRGB -> linear.
-                        const cf = new Float32Array(colArr.length);
-                        for (let cfi = 0; cfi < cf.length; cfi++) {
-                            let cv = isU8 ? colArr[cfi] / 255 : colArr[cfi];
-                            if (conv && (cStride === 3 || cfi % 4 !== 3)) {
-                                cv = (cv <= 0.04045) ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
-                            }
-                            cf[cfi] = cv;
-                        }
-                        aC = accs.length;
-                        accs.push({ bufferView: addBV(cf, 34962), componentType: 5126, count: vc, type: cStride === 4 ? 'VEC4' : 'VEC3' });
-                        log('vertex colors:', nm, cStride === 4 ? '(RGBA)' : '(RGB)', conv ? 'sRGB->linear' : 'as is');
-                    } else {
-                        warn('vertex colors: unexpected length', colArr.length, 'for', vc, 'vertices on', nm, ', skipped');
-                    }
-                }
+                // Vertex colors (Sketchfab "Color" attribute), see vertexColorAccessor.
+                let aC = -1;
+                const colAcc = vertexColorAccessor(mdl.color, vc, nm, addBV);
+                if (colAcc) { aC = accs.length; accs.push(colAcc); }
                 // A mesh can carry several index primitives (a triangle list plus extra
                 // lists, strips or fans). Merge every triangle-type primitive into one
                 // TRIANGLES list so no faces go missing; other modes (points, lines) are
                 // only used when the mesh has no triangle primitive at all.
-                let mergedInd = null, mergedMode = 4;
+                let mergedInd = null;
                 if (mdl.primitives.length > 0) {
                     let triParts = [], skippedP = 0, modeLog = [];
                     mdl.primitives.forEach((pr) => {
-                        let pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices, tl = [], t2;
+                        const pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices;
                         modeLog.push(`${pm}x${pi2 ? pi2.length : 0}`);
                         if (!pi2 || !pi2.length) return;
-                        // Degenerate triangles (repeated index) are strip joins; drop them so
-                        // Blender does not show long zero-area edges between distant vertices.
-                        let oobN = 0, degN = 0, tpos = [];
-                        function addTri(a, b, c) {
-                            if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) { tl.push(a, b, c); tpos.push(t2); }
-                            else if (a >= vc || b >= vc || c >= vc) oobN++;
-                            else degN++;
-                        }
-                        // An index >= vertex count (WebGL2 primitive restart value 65535 / 4294967295) ends a
-                        // strip or fan: restart the winding parity after it instead of treating it as a vertex.
-                        let rs = 0;
-                        if (pm === 4) {
-                            for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) addTri(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]);
-                        } else if (pm === 5) {
-                            for (t2 = 0; t2 < pi2.length; t2++) {
-                                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
-                                if (t2 - rs < 2) continue;
-                                if ((t2 - rs) % 2 === 0) addTri(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
-                                else addTri(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
-                            }
-                        } else if (pm === 6) {
-                            for (t2 = 0; t2 < pi2.length; t2++) {
-                                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
-                                if (t2 - rs < 2) continue;
-                                addTri(pi2[rs], pi2[t2 - 1], pi2[t2]);
-                            }
-                        } else { skippedP++; return; }
-                        // Diagnostic for stray long thin triangles ("stripes"): flag triangles whose longest edge is
-                        // far above the typical edge of this mesh and print where they come from in the index list.
-                        if (tl.length) (() => {
-                            let vv = mdl.vertex, nT = tl.length / 3, q, lens = [], mn = [1e30, 1e30, 1e30], mx = [-1e30, -1e30, -1e30];
-                            function el(i, j) { const dx = vv[i * 3] - vv[j * 3], dy = vv[i * 3 + 1] - vv[j * 3 + 1], dz = vv[i * 3 + 2] - vv[j * 3 + 2]; return Math.sqrt(dx * dx + dy * dy + dz * dz); }
-                            for (q = 0; q < vc; q++) for (let ax = 0; ax < 3; ax++) { const cv = vv[q * 3 + ax]; if (cv < mn[ax]) mn[ax] = cv; if (cv > mx[ax]) mx[ax] = cv; }
-                            const size = Math.sqrt(Math.pow(mx[0] - mn[0], 2) + Math.pow(mx[1] - mn[1], 2) + Math.pow(mx[2] - mn[2], 2));
-                            const step = Math.max(1, Math.floor(nT / 2000));
-                            for (q = 0; q < nT; q += step) lens.push(Math.max(el(tl[q * 3], tl[q * 3 + 1]), el(tl[q * 3 + 1], tl[q * 3 + 2]), el(tl[q * 3], tl[q * 3 + 2])));
-                            lens.sort((a, b) => a - b);
-                            let med = lens[lens.length >> 1] || 0, lim = Math.max(20 * med, 0.05 * size), hits = 0, shown = 0, drop = {}, nDrop = 0, cand = [];
-                            for (q = 0; q < nT; q++) {
-                                const a0 = tl[q * 3], b0 = tl[q * 3 + 1], c0 = tl[q * 3 + 2];
-                                const L = Math.max(el(a0, b0), el(b0, c0), el(a0, c0));
-                                if (!(L > lim)) continue;
-                                hits++;
-                                // Bridging triangle of a strip join without repeated vertices: very long and almost no width.
-                                const ux = vv[b0 * 3] - vv[a0 * 3], uy = vv[b0 * 3 + 1] - vv[a0 * 3 + 1], uz = vv[b0 * 3 + 2] - vv[a0 * 3 + 2];
-                                const wx = vv[c0 * 3] - vv[a0 * 3], wy = vv[c0 * 3 + 1] - vv[a0 * 3 + 1], wz = vv[c0 * 3 + 2] - vv[a0 * 3 + 2];
-                                const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
-                                const height = Math.sqrt(cx * cx + cy * cy + cz * cz) / L;   // 2*area / longest edge
-                                if (CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) cand.push(q);
-                                if (shown < 3 && CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) {
-                                    shown++;
-                                    const at = tpos[q], ctx = [];
-                                    for (let ci = Math.max(0, at - 5); ci <= Math.min(pi2.length - 1, at + 3); ci++) ctx.push((ci === at ? '*' : '') + pi2[ci]);
-                                    log('long triangle:', nm, `mode ${pm}`, 'tri (' + a0 + ',' + b0 + ',' + c0 + ') longest edge ' + L.toFixed(3) +
-                                        ' (typical ' + med.toFixed(4) + ', mesh size ' + size.toFixed(3) + ') at index ' + at + ' of ' + pi2.length + ', indices around: ' + ctx.join(' '));
-                                }
-                            }
-                            // A bridging triangle spans a gap: one of its long edges is used by no other triangle
-                            // (vertices welded by position). Long thin tubes/rods share every long edge, so they stay.
-                            if (cand.length) {
-                                let qs = Math.max(size * 1e-6, 1e-9), wmap = {}, wid = new Int32Array(vc), nw = 0, vi;
-                                for (vi = 0; vi < vc; vi++) {
-                                    const wk = `${Math.round(vv[vi * 3] / qs)},${Math.round(vv[vi * 3 + 1] / qs)},${Math.round(vv[vi * 3 + 2] / qs)}`;
-                                    if (wmap[wk] === undefined) wmap[wk] = nw++;
-                                    wid[vi] = wmap[wk];
-                                }
-                                const ek = (i, j) => { const a1 = wid[i], b1 = wid[j]; return a1 < b1 ? `${a1}_${b1}` : `${b1}_${a1}`; };
-                                let ecount = {}, ci2, e3;
-                                for (ci2 = 0; ci2 < cand.length; ci2++) {
-                                    const cq = cand[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
-                                    for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > lim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
-                                }
-                                for (q = 0; q < nT; q++) for (e3 = 0; e3 < 3; e3++) {
-                                    const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
-                                    if (ecount[k3] !== undefined) ecount[k3]++;
-                                }
-                                // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
-                                // grass, hair strip) does not, so it stays.
-                                const isCand = {}, onReal = new Uint8Array(nw);
-                                for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
-                                for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
-                                for (ci2 = 0; ci2 < cand.length; ci2++) {
-                                    let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
-                                    for (e3 = 0; e3 < 3; e3++) {
-                                        const ka = ek(cw[e3], cw[(e3 + 1) % 3]);
-                                        if (ecount[ka] === 1 && onReal[wid[cw[e3]]] && onReal[wid[cw[(e3 + 1) % 3]]]) open = true;
-                                    }
-                                    if (open) { drop[cq2] = true; nDrop++; }
-                                }
-                            }
-                            if (nDrop) {
-                                const kept = [];
-                                for (q = 0; q < nT; q++) if (!drop[q]) kept.push(tl[q * 3], tl[q * 3 + 1], tl[q * 3 + 2]);
-                                tl = kept;
-                                log(`mesh ${nm}: dropped ${nDrop} bridging sliver triangle(s) from the strip (stripes)`);
-                            }
-                            if (hits > nDrop) log(`mesh ${nm}: ${hits - nDrop} long thin triangle(s) kept (real geometry, edges shared)`);
-                        })();
-                        if (oobN) log('indices:', nm, `mode ${pm}`, `${pi2.length} indices ->`, `${tl.length / 3} triangles, restart/out-of-range ${oobN}, degenerate ${degN}, vertices ${vc}`);
+                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm);
+                        if (!tl) { skippedP++; return; }
                         triParts.push(tl);
                     });
                     if (mdl.primitives.length > 1) log('primitives:', nm, mdl.primitives.length, `(mode x indices: ${modeLog.join(', ')})`);
@@ -3037,40 +3397,8 @@
                     log('skinned mesh:', nm, `jointsMax=${mj}`);
                 }
 
-                // Morph targets. The viewer blends  (1 - sum w) * base + sum w_k * target_k  with
-                // absolute targets, which equals glTF's  base + sum w_k * (target_k - base).
-                const morphTargets = [], mAttr = obj._attributes || {};
-                function morphEls(a) {
-                    const b = a && (a._initialBufferArray || a._bufferArray);
-                    return (b && b._elements) || (a && a._elements) || null;
-                }
-                for (let mk = 0, mN = morphTargetCount(obj); mk < mN; mk++) {
-                    const tv = morphEls(mAttr[`Vertex_${mk}`]);
-                    if (!tv || tv.length !== mdl.vertex.length) {
-                        warn('morph target', mk, 'of', nm, 'skipped (vertex data missing or wrong size)');
-                        continue;
-                    }
-                    const dv = new Float32Array(tv.length), dMin = [Infinity, Infinity, Infinity], dMax = [-Infinity, -Infinity, -Infinity];
-                    for (let di = 0; di < tv.length; di++) {
-                        const dd = tv[di] - mdl.vertex[di];
-                        dv[di] = dd;
-                        const dax = di % 3;
-                        if (dd < dMin[dax]) dMin[dax] = dd;
-                        if (dd > dMax[dax]) dMax[dax] = dd;
-                    }
-                    const tgt = { POSITION: accs.length };
-                    accs.push({ bufferView: addBV(dv, 34962), componentType: 5126, count: vc,
-                                type: 'VEC3', min: dMin, max: dMax });
-                    let tn = morphEls(mAttr[`Normal_${mk}`]);
-                    if (tn && mdl.normal.length && tn.length === mdl.normal.length) {
-                        tn = unitNormals(tn);
-                        const dn = new Float32Array(tn.length);
-                        for (let dni = 0; dni < tn.length; dni++) dn[dni] = tn[dni] - mdl.normal[dni];
-                        tgt.NORMAL = accs.length;
-                        accs.push({ bufferView: addBV(dn, 34962), componentType: 5126, count: vc, type: 'VEC3' });
-                    }
-                    morphTargets.push(tgt);
-                }
+                // Morph targets, see morphTargetAccessors.
+                const morphTargets = morphTargetAccessors(obj, mdl, vc, nm, accs, addBV);
                 if (morphTargets.length) log('morph targets:', nm, morphTargets.length);
 
                 const primMode = noTris ? 0 : mergedInd ? 4 : ((mdl.primitives.length > 0 && typeof mdl.primitives[0].mode === 'number') ? mdl.primitives[0].mode : 4);
@@ -3101,244 +3429,14 @@
                 if (ni !== undefined) nodes[ni].mesh = mshIdx;
             });
 
-            let images = [], textures = [], imageKeys = [], usedSafe = {};
-            const textureUrlToIndex  = {};
-            const textureNameToIndex = {};
-            for (let key in saveimagecache2) {
-                if (!saveimagecache2.hasOwnProperty(key)) continue;
-                const t = saveimagecache2[key];
-                if (!t || !t.dataURL) continue;
-                const ext = t.fileExt || '.png';
-                if (!objects[(t.name || 'texture') + ext]) { warn(`texture file missing, not referenced: ${t.name || 'texture'}${ext}`); continue; }
-                // ASCII-safe file name: no encoding issues in URIs or zip loaders.
-                const safeBase = String(t.name || 'texture').replace(/[^A-Za-z0-9._-]+/g, '_') || 'texture';
-                let safeName = safeBase + ext, sc = 1;
-                while (usedSafe[safeName.toLowerCase()]) safeName = `${safeBase}_${sc++}${ext}`;   // case-insensitive file systems
-                usedSafe[safeName.toLowerCase()] = true;
-                const path = `textures/${safeName}`;
-                const ii = images.length;
-                imageKeys.push({ key: (t.name || 'texture') + ext, safe: safeName });
-                images.push({ uri: path });
-                textures.push({ source: ii });
-                const nu = normalizeUrl(key);
-                if (nu) textureUrlToIndex[nu] = ii;
-                const sn = sanitizeTextureName(t.name);
-                if (sn) textureNameToIndex[sn] = ii;
-            }
+            const pool = buildTexturePool();
+            let images = pool.images, textures = pool.textures;
+            const imageKeys = pool.imageKeys;
 
-            function findTexIdx(info) {
-                if (!info) return undefined;
-                const u = normalizeUrl(info.url);
-                if (u && textureUrlToIndex[u] !== undefined) return textureUrlToIndex[u];
-                const n = sanitizeTextureName(info.name);
-                if (n && textureNameToIndex[n] !== undefined) return textureNameToIndex[n];
-                return undefined;
-            }
-
-            function flatEm(fl) {
-                const e = fl && fl.EmitColor;
-                const f = (e && typeof e.factor === 'number') ? e.factor : 1;
-                return Math.max(0, Math.min(1, f));
-            }
-
-            // Channels the viewer shows with a texture that did not make it into the export.
-            mats.forEach((m, mi) => {
-                const chan = matsChannelInfo[mi] || {};
-                (() => {
-                    const fl = matsFlat[mi], mp = fl && fl.__map, lost = [], atl = [];
-                    if (mp) for (let mk2 in mp) {
-                        if (!mp.hasOwnProperty(mk2) || !(mp[mk2] >= 0) || mk2 === 'Inspector' || mk2 === 'Matcap') continue;
-                        const inf = chan[mk2];
-                        if (!inf || inf.atlas || !(inf.url || inf.name)) { atl.push(mk2); continue; }
-                        if (findTexIdx(inf) === undefined) lost.push(mk2);
-                    }
-                    if (lost.length) warn(`material ${m.name}: channels with a texture in the viewer but not in the export: ${lost.join(', ')}`);
-                    if (atl.length) log(`material ${m.name}: colour atlas / no image for ${atl.join(', ')}, using flat material values`);
-                })();
-            });
-            let anyRealTex = false;
-            for (let cmi in matsChannelInfo) {
-                if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
-                for (let ck in matsChannelInfo[cmi]) {
-                    const ci = matsChannelInfo[cmi][ck];
-                    if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
-                }
-            }
-            if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
-
-            if (textures.length) {
-                mats.forEach((m, mi) => {
-                    if (!matHasUV[m.name]) return;
-                    const chan = matsChannelInfo[mi] || {};
-                    let assigned = false;
-
-                    const albedo = chan.AlbedoPBR || chan.DiffusePBR || chan.BaseColorPBR || chan.DiffuseColor;
-                    const ai = findTexIdx(albedo);
-                    if (ai !== undefined) {
-                        m.pbrMetallicRoughness.baseColorTexture = { index: ai };
-                        assigned = true;
-                    }
-
-                    const nrm = chan.NormalMap || chan.NormalPBR;
-                    const ni = findTexIdx(nrm);
-                    if (ni !== undefined) {
-                        m.normalTexture = { index: ni };
-                        assigned = true;
-                    }
-
-                    const ao = chan.AOPBR || chan.OcclusionPBR;
-                    const oi = findTexIdx(ao);
-                    if (oi !== undefined) {
-                        m.occlusionTexture = { index: oi };
-                        assigned = true;
-                    }
-
-                    const em = chan.EmissivePBR || chan.EmissionPBR || chan.EmitColor;
-                    const ei = findTexIdx(em);
-                    if (ei !== undefined) {
-                        m.emissiveTexture = { index: ei };
-                        // glTF multiplies the texture by emissiveFactor (default 0 = no emission).
-                        const emF = flatEm(matsFlat[mi]);
-                        m.emissiveFactor = [emF, emF, emF];
-                        assigned = true;
-                    }
-
-                    // Merged MR (see mergeMRTextures): registered in the
-                    // pool under name "<sanitized mesh name>_MR".
-                    const mrName = `${sanitizeTextureName(m.name)}_MR`;
-                    const mrIdx = textureNameToIndex[mrName];
-                    if (mrIdx !== undefined) {
-                        m.pbrMetallicRoughness.metallicRoughnessTexture = { index: mrIdx };
-                        assigned = true;
-                    }
-
-                    // Merged opacity (see mergeOpacityTextures): the RGBA texture
-                    // replaces the plain base color and the material blends.
-                    const alphaIdx = textureNameToIndex[`${_alphaShare[sanitizeTextureName(m.name)] || sanitizeTextureName(m.name)}_Alpha`];
-                    if (alphaIdx !== undefined) {
-                        m.pbrMetallicRoughness.baseColorTexture = { index: alphaIdx };
-                        if (_opacityKind[sanitizeTextureName(m.name)] === 'alphamask') {
-                            m.alphaMode = 'MASK'; m.alphaCutoff = 0.5;
-                        } else {
-                            m.alphaMode = 'BLEND';
-                        }
-                        assigned = true;
-                        log(`material ${m.name}: alphaMode ${m.alphaMode} with merged ${_opacityKind[sanitizeTextureName(m.name)] || 'opacity'} texture`);
-                    }
-
-                    if (!assigned) {
-                        // No texture of this material was captured. Do not borrow texture 0
-                        // (an unrelated image); keep the plain material and say so.
-                        warn('material ' + m.name + ': no texture found in the capture pool, exported without textures'
-                             + (CONFIG.TEXTURE_WAIT_SECONDS ? '' : ' (texture wait is off)'));
-                    }
-                });
-            }
-
-            // Flat material values for channels without a texture (texture-less models): base
-            // color, metalness, roughness, emission. Textured channels keep factor 1 so the
-            // texture alone decides, as before.
-            mats.forEach((m, mi) => {
-                const flat = matsFlat[mi], chan = matsChannelInfo[mi] || {}, pbr = m.pbrMetallicRoughness;
-                if (!flat) return;
-                const did = [];
-                const cmap = flat.__map;
-                function texd(n) {
-                    // A channel counts as textured only when it has a real image (url or name) that is not
-                    // the generated colour atlas; otherwise the flat material value is the best data we have.
-                    const real = !!(chan[n] && (chan[n].url || chan[n].name) && !chan[n].atlas);
-                    if (cmap && typeof cmap[n] === 'number') return cmap[n] >= 0 && real;
-                    return real;
-                }
-                const chKeys = [];
-                for (let chk in chan) if (chan.hasOwnProperty(chk) && (chan[chk].url || chan[chk].name)) chKeys.push(chk);
-                const mapKeys = [];
-                if (cmap) for (let mpk in cmap) if (cmap.hasOwnProperty(mpk) && cmap[mpk] >= 0) mapKeys.push(`${mpk}=${cmap[mpk]}`);
-                log('material ' + m.name + ': texture channels [' + chKeys.join(',') + '] mapping [' + mapKeys.join(',') + ']' +
-                    (pbr.baseColorTexture ? ' baseColorTexture set' : ' no baseColorTexture'));
-                const alb = flat.AlbedoPBR;
-                const alphaOnlyTex = !!_opacityNoColor[sanitizeTextureName(m.name)];
-                if (alb && alb.enable && (alb.color || typeof alb.factor === 'number') && (!pbr.baseColorTexture || alphaOnlyTex) && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
-                    // No colour value means white scaled by the factor (factor 0 = black base, colour from emission only).
-                    const af = (typeof alb.factor === 'number') ? alb.factor : 1, ac = alb.color || [1, 1, 1];
-                    const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
-                    pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
-                    did.push('base color');
-                }
-                const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
-                // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
-                const mrE = saveimagecache2[`__merged_mr__:${sanitizeTextureName(m.name)}`], mrTex = !!pbr.metallicRoughnessTexture;
-                const mFlat = !texd('MetalnessPBR') && !(mrTex && mrE && mrE.hasM);
-                const rFlat = !texd('RoughnessPBR') && !(mrTex && mrE && mrE.hasR);
-                if (mrTex && !(mrE && mrE.hasM)) pbr.metallicFactor = 0;   // non-metal unless a flat value follows
-                if (mt && mt.enable && typeof mt.factor === 'number' && mFlat) {
-                    pbr.metallicFactor = CONFIG.FLAT_MR_FROM_VIEWER ? mt.factor : 0; did.push('metalness');
-                }
-                if (rg && rg.enable && typeof rg.factor === 'number' && rFlat) {
-                    pbr.roughnessFactor = CONFIG.FLAT_MR_FROM_VIEWER ? rg.factor : 0.5; did.push('roughness');
-                }
-                const op = flat.Opacity || flat.AlphaMask;
-                if (op && op.enable && pbr.baseColorTexture && !m.alphaMode && _opacityOneFile[sanitizeTextureName(m.name)]) {
-                    const isBlend = !!flat.Opacity && /blend/i.test(String(op.type || ''));
-                    m.alphaMode = isBlend ? 'BLEND' : 'MASK';
-                    if (!isBlend) m.alphaCutoff = 0.5;
-                    did.push(`opacity ${m.alphaMode} (${op.type})`);
-                }
-                // Opacity given as a plain value (no mask image): use it as base colour alpha.
-                const opf = flat.Opacity;
-                if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && typeof opf.factor === 'number' && opf.factor < 0.999) {
-                    if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
-                    pbr.baseColorFactor[3] = Math.max(0, Math.min(1, opf.factor));
-                    m.alphaMode = 'BLEND';
-                    did.push(`opacity ${pbr.baseColorFactor[3].toFixed(2)} (${opf.type})`);
-                }
-                if (mt && mt.enable === false && mFlat) {
-                    pbr.metallicFactor = 0; did.push('metalness off');
-                }
-                const em = flat.EmitColor;
-                if (em && em.enable && em.color && !m.emissiveTexture && !texd('EmitColor')) {
-                    const ef = (typeof em.factor === 'number') ? em.factor : 1;
-                    const ev = [Math.min(1, em.color[0] * ef), Math.min(1, em.color[1] * ef), Math.min(1, em.color[2] * ef)];
-                    if (ev[0] > 0 || ev[1] > 0 || ev[2] > 0) { m.emissiveFactor = ev; did.push('emission'); }
-                }
-                if (did.length) log(`material ${m.name}: flat values from material model (${did.join(', ')})`);
-            });
-
-            // Sketchfab can render a model two-sided (Inspector: Single Sided OFF), which glTF
-            // expresses per material. DOUBLE_SIDED marks all materials two-sided; with
-            // DOUBLE_SIDED_AUTO, materials the viewer draws single-sided (cullFace set) stay single-sided.
-            if (CONFIG.DOUBLE_SIDED) {
-                const singleNames = [];
-                mats.forEach((m, mi) => {
-                    const cv = matsFlat[mi] ? matsFlat[mi].__cull : undefined;   // 1029 (GL_BACK) = Single Sided ON, 0 = OFF
-                    const on = !(cv === undefined || cv === null || cv === 0 || cv === false || /^(none|0|false|off)?$/i.test(String(cv)));
-                    if (CONFIG.DOUBLE_SIDED_AUTO && on) { singleNames.push(m.name); return; }
-                    m.doubleSided = true;
-                });
-                log('materials marked doubleSided: ' + (mats.length - singleNames.length) + ' of ' + mats.length +
-                    (singleNames.length ? ` (single sided in the viewer: ${singleNames.join(', ')})` : ''));
-            }
+            finishMaterials(mats, matsChannelInfo, matsFlat, matHasUV, pool);
 
             // ---- animation clips (multi-clip aware) ----
-            const mlA = document.getElementsByClassName('model-name__label')[0];
-            const animBase = mlA ? mlA.textContent.trim().replace(/\.+$/, '') : 'model';
-            // RECORD ALL CLIPS fills window.clips (and clears recordedFrames), so even one
-            // clip from it (cancelled after the first) must come from window.clips.
-            let clipSets = [];
-            if (window.clips && window.clips.length) {
-                window.clips.forEach((c) => {
-                    if (c && c.frames && c.frames.length > 1) {
-                        clipSets.push({ name: c.name, frames: c.frames });
-                    }
-                });
-            }
-            if (clipSets.length) {
-                log(`export: multi-clip mode, clips=${clipSets.length}`);
-            } else {
-                // single-clip path: same data source and behaviour as before
-                clipSets = (window.recordedFrames.length > 1)
-                    ? [{ name: `${animBase}_anim`, frames: window.recordedFrames }] : [];
-            }
+            const clipSets = collectClipSets();
             const hasFrames = clipSets.length > 0;
             const liveSnap = hasFrames ? null : snapshotFrame().meshes;
             const gltfSkins = [];
@@ -3581,16 +3679,17 @@
                         }
                         return false;
                     };
-                    // Rest pose palette, chosen as in the rest pose code below (without its log lines).
-                    const smE = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
-                    const restPalE = (CONFIG.REST_POSE_SOURCE === 'static' && smE && smE.palette &&
-                                    smE.palette.length >= paletteRef.palette.length) ? smE.palette : paletteRef.palette;
+                    // Rest pose palette: the viewer's Static Pose snapshot (REST_POSE_SOURCE 'static') when
+                    // it is usable, else the first frame of the first clip. Also used for the joint defaults below.
+                    const sm = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
+                    const staticOk = !!(sm && sm.palette && sm.palette.length >= paletteRef.palette.length);
+                    const restPal = (CONFIG.REST_POSE_SOURCE === 'static' && staticOk) ? sm.palette : paletteRef.palette;
                     // A joint that does not move in a clip but is held away from the rest pose needs a constant
                     // pose in that clip. Without it, a glTF player shows the rest pose for that joint.
                     const jointDiffersFromRest = (jx, cx) => {
                         const f0 = tracks[cx].frames[0].meshes[mIdx], p0 = f0 && f0.palette;
-                        if (!p0 || p0.length < (jx + 1) * 12 || restPalE.length < (jx + 1) * 12) return false;
-                        const a = jointMat(p0, jx), b = jointMat(restPalE, jx);
+                        if (!p0 || p0.length < (jx + 1) * 12 || restPal.length < (jx + 1) * 12) return false;
+                        const a = jointMat(p0, jx), b = jointMat(restPal, jx);
                         for (let dv = 0; dv < 16; dv++) {
                             if (Math.abs(a[dv] - b[dv]) > 1e-5 * Math.max(1, Math.abs(b[dv]))) return true;
                         }
@@ -3631,7 +3730,7 @@
                             const tr = tracks[ci];
                             const useN = poseOnly ? 1 : tr.frames.length;
                             let T = [], R = [], S = [], RV = [];
-                            let prevQ = null, prevQV = null, prevV = null;   // hemisphere fix resets per clip, per joint
+                            let prevQ = null, prevQV = null;   // hemisphere fix resets per clip, per joint
                             const tgtTRS = shearJ[jn] ? makeHelper(jn) : nIdx;   // sheared joint: T/R/S go on the helper
                             let svdSeq = null;
                             if (shearJ[jn]) {
@@ -3725,9 +3824,6 @@
                     // Rest pose source: the first frame of the first clip, or the viewer's
                     // Static Pose snapshot (REST_POSE_SOURCE). Static falls back to the clip
                     // frame when no usable snapshot exists (e.g. single-clip RECORD).
-                    let restPal = paletteRef.palette;
-                    const sm = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
-                    const staticOk = !!(sm && sm.palette && sm.palette.length >= paletteRef.palette.length);
                     if (staticOk) {
                         let diffJ = 0;
                         for (let dj = 0; dj < jointCount; dj++) {
@@ -3740,12 +3836,9 @@
                         log('rest pose: mesh ' + mIdx + ' Static Pose vs clip frame 0 differ on ' +
                             diffJ + '/' + jointCount + ' joints');
                     }
-                    if (CONFIG.REST_POSE_SOURCE === 'static') {
-                        if (staticOk) restPal = sm.palette;
-                        else if (!staticWarned) {
-                            staticWarned = true;   // once per export, not once per mesh
-                            warn('rest pose: Static Pose snapshot unavailable (run RECORD ALL CLIPS first); using clip frame 0');
-                        }
+                    if (CONFIG.REST_POSE_SOURCE === 'static' && !staticOk && !staticWarned) {
+                        staticWarned = true;   // once per export, not once per mesh
+                        warn('rest pose: Static Pose snapshot unavailable (run RECORD ALL CLIPS first); using clip frame 0');
                     }
                     log('rest pose source: ' + (restPal === paletteRef.palette ? 'clip frame 0' : 'Static Pose') +
                         ' (mesh ' + mIdx + ')');
@@ -3985,29 +4078,9 @@
                 materials: mats,
                 buffers: [{ byteLength: off }]
             };
-            // Drop textures no material references (captured env/matcap/leftover images) and remap indices.
-            const texUsed = {}, texNew = {}, keptImages = [], keptTextures = [], zipTex = {};
-            function markTex(o) { if (o && typeof o.index === 'number') texUsed[o.index] = true; }
-            mats.forEach((m) => {
-                const pb = m.pbrMetallicRoughness || {};
-                markTex(pb.baseColorTexture); markTex(pb.metallicRoughnessTexture);
-                markTex(m.normalTexture); markTex(m.occlusionTexture); markTex(m.emissiveTexture);
-            });
-            for (let ti2 = 0; ti2 < textures.length; ti2++) {
-                if (!texUsed[ti2]) continue;
-                texNew[ti2] = keptTextures.length;
-                keptImages.push({ uri: images[textures[ti2].source].uri });
-                keptTextures.push({ source: keptImages.length - 1 });
-                zipTex[imageKeys[textures[ti2].source].key] = imageKeys[textures[ti2].source].safe;
-            }
-            function remapTex(o) { if (o && typeof o.index === 'number') o.index = texNew[o.index]; }
-            mats.forEach((m) => {
-                const pb = m.pbrMetallicRoughness || {};
-                remapTex(pb.baseColorTexture); remapTex(pb.metallicRoughnessTexture);
-                remapTex(m.normalTexture); remapTex(m.occlusionTexture); remapTex(m.emissiveTexture);
-            });
-            if (keptTextures.length !== textures.length) log(`textures: ${keptTextures.length} used, ${textures.length - keptTextures.length} unused dropped`);
-            images = keptImages; textures = keptTextures;
+            // Drop textures no material references (captured env/matcap/leftover images), see pruneUnusedTextures.
+            const pruned = pruneUnusedTextures(mats, images, textures, imageKeys), zipTex = pruned.zipTex;
+            images = pruned.images; textures = pruned.textures;
             // glTF forbids empty arrays (validator: EMPTY_ENTITY), so texture-less models omit these.
             if (images.length) gltf.images = images;
             if (textures.length) gltf.textures = textures;
@@ -4026,31 +4099,10 @@
                 binPos += binChunks[bc].length;
             }
             binChunks.length = 0;   // the joined copy is the only one kept
-            const ml2 = document.getElementsByClassName('model-name__label')[0];
-            const modelName = (ml2 ? ml2.textContent.trim().replace(/\.+$/, '') : 'model').replace(/[\\\/:*?"<>|]/g, '_') || 'model';
+            const modelName = modelBaseName().replace(/[\\\/:*?"<>|]/g, '_') || 'model';
             if (skipGlb) return { glb: null, gltf, bin: binAll, zipTex, modelName };
 
-            const jsonStr = JSON.stringify(gltf);
-            const jsonBytes = new TextEncoder().encode(jsonStr);
-            const jAl = pad(jsonBytes.byteLength), jPad = jAl - jsonBytes.byteLength;
-            const bin = binAll.buffer;
-            const bAl = pad(bin.byteLength), bPad = bAl - bin.byteLength;
-            const total = 12 + 8 + jAl + 8 + bAl;
-
-            const glb = new ArrayBuffer(total);
-            let dv = new DataView(glb), o = 0;
-            dv.setUint32(o, 0x46546C67, true); o += 4;
-            dv.setUint32(o, 2, true); o += 4;
-            dv.setUint32(o, total, true); o += 4;
-            dv.setUint32(o, jAl, true); o += 4;
-            dv.setUint32(o, 0x4E4F534A, true); o += 4;
-            new Uint8Array(glb, o, jsonBytes.length).set(jsonBytes); o += jsonBytes.length;
-            for (let k1 = 0; k1 < jPad; k1++) new Uint8Array(glb, o + k1, 1)[0] = 0x20;
-            o += jPad;
-            dv.setUint32(o, bAl, true); o += 4;
-            dv.setUint32(o, 0x004E4942, true); o += 4;
-            new Uint8Array(glb, o, bin.byteLength).set(new Uint8Array(bin)); o += bin.byteLength;
-            for (let k2 = 0; k2 < bPad; k2++) new Uint8Array(glb, o + k2, 1)[0] = 0;
+            const glb = packGlb(gltf, binAll);
 
             return { glb, gltf, bin: binAll, zipTex, modelName };
         } catch (e) {
@@ -4217,8 +4269,6 @@
             });
         });
     }
-
-    // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
 
     // ====================================================================
     // UI panel: progress bars, buttons, settings
