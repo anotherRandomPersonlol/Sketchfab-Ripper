@@ -2140,24 +2140,38 @@
     function recordClipRealtime(mgr, def, base, cb) {
         mgr.setSeekTime(base);
         if (mgr._pause) mgr.togglePause();
-        // Frame times come from the manager's own clock (getSimulationTime) so they
-        // match what the viewer is showing even if rAF drops frames or _timeFactor
-        // is not 1. Falls back to wall-clock time if that clock is unavailable.
-        const hasSimClock = typeof mgr.getSimulationTime === 'function';
-        let wall0 = performance.now() / 1000, sim0 = null, lastT = -1, lastSeen = -1, frames = [];
-        let useSim = hasSimClock;
-        function clockNow() {
+        // Frame times are clip time: the manager's clock (getSimulationTime, which runs
+        // at wall speed) times the viewer's playback speed (getTimeFactor: x0.1, x0.5,
+        // x1, x2). The speed is read every frame, so a change while recording is
+        // followed. Slow playback gives more samples; the clip still exports at x1.
+        // Falls back to wall-clock time if the manager clock is unavailable.
+        const speedNow = () => {
+            let f;
+            try { f = typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor; } catch (e) { f = mgr._timeFactor; }
+            return (typeof f === 'number' && isFinite(f) && f > 0) ? f : 1;
+        };
+        let useSim = typeof mgr.getSimulationTime === 'function';
+        let prevClock = null, clipT = 0, lastT = -1, lastSeen = -1, frames = [];
+        let lastAdvanceWall = performance.now() / 1000;
+        const speed0 = speedNow();
+        function rawClock() {
             if (useSim) {
                 const s = mgr.getSimulationTime();
-                if (typeof s === 'number' && isFinite(s)) {
-                    if (sim0 === null) sim0 = s;
-                    return s - sim0;
-                }
+                if (typeof s === 'number' && isFinite(s)) return s;
                 warn(`sim clock returned ${s}, falling back to wall clock`);
                 useSim = false;
-                wall0 = performance.now() / 1000 - (lastT > 0 ? lastT : 0);
+                prevClock = null;   // restart the deltas on the new clock
             }
-            return performance.now() / 1000 - wall0;
+            return performance.now() / 1000;
+        }
+        function clockNow() {
+            const c = rawClock();
+            if (prevClock !== null) {
+                const d = c - prevClock;
+                if (d > 0) { clipT += d * speedNow(); lastAdvanceWall = performance.now() / 1000; }
+            }
+            prevClock = c;
+            return clipT;
         }
         // Samples cover [0, duration). The closing frame at t = duration is a copy
         // of frame 0 (the clip loops). We never keep a sample taken at or past the
@@ -2202,15 +2216,16 @@
                 frames.push({ time: t, meshes: snapshotFrame().meshes });
                 lastT = t;
             }
-            // Safety net: sim clock stuck, so end by wall time instead of looping forever.
-            if (performance.now() / 1000 - wall0 > def.duration + 3) {
+            // Safety net: the clip clock did not move for 3 s (paused viewer, stuck
+            // clock), so end instead of looping forever. Slow playback still moves it.
+            if (performance.now() / 1000 - lastAdvanceWall > 3) {
                 finish(`clock stalled at t=${t.toFixed(3)}`);
                 return;
             }
             lastSeen = t;   // last clock value seen (kept or skipped by RECORD_FPS), for end-of-clip detection
             requestAnimationFrame(tick);
         }
-        log(`clip clock: ${useSim ? 'manager simulation time' : 'wall clock'} (${def.name})`);
+        log(`clip clock: ${useSim ? 'manager simulation time' : 'wall clock'} x playback speed ${speed0} (${def.name})`);
         requestAnimationFrame(tick);
     }
 

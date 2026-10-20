@@ -122,6 +122,9 @@ node). Useful members:
 - Seeking while paused (`setSeekTime`) updates the palette only
   every 15-20 frames. Record in real time instead.
 - Frame times come from `getSimulationTime()` (wall-clock fallback).
+- `getSimulationTime()` runs at wall speed; the playback speed (x0.1 to x2) is `getTimeFactor()` / `_timeFactor`
+  (probe 2026-10-20: ratio 1.0 at x0.5 with `_timeFactor` 0.5). Clip time = sum of clock deltas x speed, read every frame.
+  The recorder stops as "clock stalled" only when that clip time does not move for 3 s of wall time.
   The viewer defaults to "Play all" and can switch clips at the end of
   one, so samples at or past `duration` are dropped. The loop is closed
   with a copy of frame 0 at `t = duration`.
