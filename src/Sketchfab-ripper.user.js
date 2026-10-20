@@ -59,6 +59,10 @@
     let button_dw       = false;
     let _exporting      = false;   // true while downloadGLB runs (read by the recorders, which are defined first)
 
+
+    // ====================================================================
+    // Settings (CONFIG, saved in localStorage)
+    // ====================================================================
     const CONFIG = {
         MAX_RECORD_SECONDS: 12,
         AUTO_RELOAD_ON_FAILURE: true,
@@ -105,6 +109,16 @@
     }
 
     loadConfig();
+
+    // ====================================================================
+    // Logging
+    // ====================================================================
+    const TAG = '[Ripper]';
+    function log(...args)  { console.log(TAG, ...args); }
+    function warn(...args) { console.warn(TAG, ...args); }
+    function err(...args)  { console.error(TAG, ...args); }
+
+    log('init');
 
     // ====================================================================
     // UI text: English base + translations (the console log stays English)
@@ -1085,22 +1099,6 @@
         return fillVars(s[form] || s.other || s.one, Object.assign({ n }, vars));
     }
 
-
-    // Z-up -> Y-up. Maps (x, y, z) -> (x, z, -y).
-    const YUP = [
-        1, 0, 0, 0,
-        0, 0, -1, 0,
-        0, 1, 0, 0,
-        0, 0, 0, 1
-    ];
-
-    const TAG = '[Ripper]';
-    function log(...args)  { console.log(TAG, ...args); }
-    function warn(...args) { console.warn(TAG, ...args); }
-    function err(...args)  { console.error(TAG, ...args); }
-
-    log('init');
-
     // ====================================================================
     // Math
     // ====================================================================
@@ -1147,39 +1145,13 @@
         ];
     }
 
-    // Confirmed from OSG source: MatrixTransform stores local transform
-    // in `.matrix` and exposes it via `getMatrix()`.
-    function getLocalNodeMatrix(node) {
-        if (!node) return identityMat4();
-        if (typeof node.getMatrix === 'function') {
-            try {
-                const m1 = matToArr(node.getMatrix());
-                if (m1) return m1;
-            } catch (e) {}
-        }
-        if (node.matrix) {
-            const m2 = matToArr(node.matrix);
-            if (m2) return m2;
-        }
-        if (node._matrix) {
-            const m3 = matToArr(node._matrix);
-            if (m3) return m3;
-        }
-        return identityMat4();
-    }
-
-    function computeWorldMatrix(obj) {
-        const chain = [];
-        let curr = obj;
-        let guard = 0;
-        while (curr && guard++ < 64) {
-            chain.unshift(getLocalNodeMatrix(curr));
-            curr = curr._parents && curr._parents[0];
-        }
-        let world = identityMat4();
-        for (let i = 0; i < chain.length; i++) world = mulMat4(world, chain[i]);
-        return world;
-    }
+    // Z-up -> Y-up. Maps (x, y, z) -> (x, z, -y).
+    const YUP = [
+        1, 0, 0, 0,
+        0, 0, -1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1
+    ];
 
     // ====================================================================
     // Sheared joint matrices: M = T * U * diag(s) * Vt (exact for any 3x3), stored as two glTF nodes
@@ -1379,40 +1351,40 @@
     }
 
     // ====================================================================
-    // Texture capture
+    // Viewer access: node matrices, materials, morph targets (read only)
     // ====================================================================
-    const _usedTextureNames = {};
-
-    function sanitizeTextureName(raw) {
-        if (!raw) return '';
-        let s = String(raw);
-        try { s = decodeURIComponent(s); } catch (e) {}
-        s = s.replace(/\.(jpe?g|png|webp|gif|ktx2?|basis|tga|bmp)$/i, '');
-        s = s.replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').trim();
-        return s;
+    // Confirmed from OSG source: MatrixTransform stores local transform
+    // in `.matrix` and exposes it via `getMatrix()`.
+    function getLocalNodeMatrix(node) {
+        if (!node) return identityMat4();
+        if (typeof node.getMatrix === 'function') {
+            try {
+                const m1 = matToArr(node.getMatrix());
+                if (m1) return m1;
+            } catch (e) {}
+        }
+        if (node.matrix) {
+            const m2 = matToArr(node.matrix);
+            if (m2) return m2;
+        }
+        if (node._matrix) {
+            const m3 = matToArr(node._matrix);
+            if (m3) return m3;
+        }
+        return identityMat4();
     }
 
-    function deriveTextureName(url) {
-        if (!url) return 'texture';
-        const clean = String(url).split('?')[0].split('#')[0];
-        const base = clean.substring(clean.lastIndexOf('/') + 1);
-        const s = sanitizeTextureName(base);
-        return s || 'texture';
-    }
-
-    function pickTextureName(imagemodel, url) {
-        // Prefer Sketchfab's metadata name (semantic, e.g.
-        // "Patriot_Radar_Body_D_Desert"). Fall back to URL base if
-        // metadata is missing or empty.
-        const metaName = imagemodel && imagemodel.attributes && imagemodel.attributes.name;
-        const s = sanitizeTextureName(metaName);
-        if (s) return s;
-        return deriveTextureName(url);
-    }
-
-    function normalizeUrl(u) {
-        if (!u) return '';
-        return String(u).split('?')[0].split('#')[0].replace(/\/+$/, '');
+    function computeWorldMatrix(obj) {
+        const chain = [];
+        let curr = obj;
+        let guard = 0;
+        while (curr && guard++ < 64) {
+            chain.unshift(getLocalNodeMatrix(curr));
+            curr = curr._parents && curr._parents[0];
+        }
+        let world = identityMat4();
+        for (let i = 0; i < chain.length; i++) world = mulMat4(world, chain[i]);
+        return world;
     }
 
     // Read Sketchfab's per-mesh channel -> source-texture mapping.
@@ -1507,242 +1479,6 @@
         return map;
     }
 
-    window.drawhookcanvas = (e, imagemodel) => {
-        try {
-            if (!e) return e;
-            // 32/64/128 px square images are usually low-res placeholders of a bigger texture; they are
-            // skipped only while a larger variant exists (a texture whose real size is 128 px is kept).
-            const isSmall = (e.width === 128 && e.height === 128) ||
-                          (e.width === 32  && e.height === 32)  ||
-                          (e.width === 64  && e.height === 64);
-            if (isSmall && !(imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images)) return e;
-            if (imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images) {
-                const alpha = e.options.format;
-                let url_image = e.url, max_size = 0, obr = e;
-                imagemodel.attributes.images.forEach((img) => {
-                    const ok = alpha === 'A' ? img.options.format === alpha : true;
-                    let d = img.width; while (d > 0 && d % 2 === 0) d = d / 2;
-                    if (img.size > max_size && ok && d === 1) {
-                        max_size = img.size; url_image = img.url; obr = img;
-                    }
-                });
-                if (isSmall && !(obr && obr.width <= e.width)) return e;   // a larger variant will come
-                if (!saveimagecache2[url_image]) {
-                    const base = pickTextureName(imagemodel, url_image);
-                    let texName = base, n = 1;
-                    while (_usedTextureNames[texName]) texName = `${base}_${n++}`;
-                    _usedTextureNames[texName] = true;
-                    saveimagecache2[url_image] = { name: texName };
-                }
-                return obr;
-            }
-        } catch (e2) { warn('drawhookcanvas', e2.message); }
-        return e;
-    };
-
-    window.drawhookimg = (gl, t) => {
-        try {
-            if (!t || !t[5]) return;   // this runs per draw: a missing image must not warn every frame
-            const url = t[5].currentSrc, width = t[5].width, height = t[5].height;
-            if (!saveimagecache2[url]) return;
-            if (saveimagecache2[url].dataURL) return;
-            const data = new Uint8Array(width * height * 4);
-            gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
-            const hh = height / 2 | 0, bpr = width * 4, temp = new Uint8Array(width * 4);
-            for (let y = 0; y < hh; ++y) {
-                const t0 = y * bpr, b0 = (height - y - 1) * bpr;
-                temp.set(data.subarray(t0, t0 + bpr));
-                data.copyWithin(t0, b0, b0 + bpr);
-                data.set(temp, b0);
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = width; canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            const id = ctx.createImageData(width, height);
-            id.data.set(data);
-            ctx.putImageData(id, 0, 0);
-            const isJpeg = /\.(jpe?g)(?:\?|$)/i.test(url);
-            const mime   = isJpeg ? 'image/jpeg' : 'image/png';
-            const ext    = isJpeg ? '.jpg' : '.png';
-            const q      = isJpeg ? 0.92 : undefined;
-            const name   = saveimagecache2[url].name + ext;
-            saveimagecache2[url].fileExt = ext;
-            saveimagecache2[url].dataURL = true;   // capture flag only (a base64 copy was never read)
-            canvas.toBlob((b) => { objects[name] = b; canvas.width = 0; }, mime, q);
-        } catch (e) { warn('drawhookimg', e.message); }
-    };
-
-    // ====================================================================
-    // attachbody
-    // ====================================================================
-    function geomKey(o, noIndices) {
-        const v = o && o._attributes && o._attributes.Vertex && o._attributes.Vertex._elements;
-        if (!v || !v.length) return '';
-        let n = v.length, parts = [n], k;
-        for (k = 0; k < 16; k++) parts.push(v[Math.floor(k * (n - 1) / 15)]);
-        if (!noIndices) {
-            const pr = o._primitives && o._primitives[0];
-            parts.push(pr && pr.indices && pr.indices._elements ? pr.indices._elements.length : -1);
-        }
-        return parts.join(',');
-    }
-
-    // The viewer can hold a second copy of a mesh that only has LINES (its wireframe display).
-    // It has the same vertices as the real mesh but no triangles. Returns the index of the real
-    // mesh when obj is such an overlay, otherwise -1. A line mesh with no twin is real and is kept.
-    function wireOverlayTwin(list, idx) {
-        let obj = list[idx], prims = obj && obj._primitives, i, p, hasLines = false, key;
-        if (!prims || !prims.length) return -1;
-        for (i = 0; i < prims.length; i++) {
-            p = prims[i];
-            if (!p || !p.indices) continue;
-            if (p.mode === 1 || p.mode === 2 || p.mode === 3) hasLines = true;
-            else return -1;   // has a triangle (or point) primitive: not an overlay
-        }
-        if (!hasLines) return -1;
-        key = geomKey(obj, true);
-        if (!key) return -1;
-        for (i = 0; i < list.length; i++) {
-            let o2 = list[i], pr2 = o2 && o2._primitives, j, tri = false;
-            if (i === idx || !pr2 || geomKey(o2, true) !== key) continue;
-            for (j = 0; j < pr2.length; j++) {
-                const m2 = pr2[j] && pr2[j].mode;
-                if (pr2[j] && pr2[j].indices && (m2 === undefined || m2 === null || m2 === 4 || m2 === 5 || m2 === 6)) tri = true;
-            }
-            if (tri) return i;
-        }
-        return -1;
-    }
-
-    // Keyframe reduction. Keeps the first and last key, and every key that is needed so that
-    // interpolation between the kept keys stays within tol of each recorded sample (per component).
-    // Rotations (isQuat) are checked with slerp, as glTF interpolates them. A segment spans at most
-    // maxSpan recorded frames, which limits the run time. Returns the indices of the kept keys.
-    function reduceKeys(times, vals, n, tol, isQuat, maxSpan) {
-        let nk = times.length, keep = [0], i = 0, j, k, c, ok, best, tmp = [0, 0, 0, 0];
-        if (nk < 3) { for (k = 1; k < nk; k++) keep.push(k); return keep; }
-        function interp(a, b, u) {
-            const ia = a * n, ib = b * n;
-            if (isQuat && n === 4) {
-                let dt = vals[ia] * vals[ib] + vals[ia + 1] * vals[ib + 1] + vals[ia + 2] * vals[ib + 2] + vals[ia + 3] * vals[ib + 3];
-                let sg = dt < 0 ? -1 : 1, w0, w1;
-                dt = Math.abs(dt);
-                if (dt > 0.9995) { w0 = 1 - u; w1 = u; }
-                else {
-                    const th = Math.acos(Math.min(1, dt)), sn = Math.sin(th);
-                    w0 = Math.sin((1 - u) * th) / sn; w1 = Math.sin(u * th) / sn;
-                }
-                let len = 0;
-                for (c = 0; c < 4; c++) { tmp[c] = w0 * vals[ia + c] + sg * w1 * vals[ib + c]; len += tmp[c] * tmp[c]; }
-                len = Math.sqrt(len) || 1;
-                for (c = 0; c < 4; c++) tmp[c] /= len;
-            } else {
-                for (c = 0; c < n; c++) tmp[c] = vals[ia + c] + (vals[ib + c] - vals[ia + c]) * u;
-            }
-        }
-        while (i < nk - 1) {
-            best = i + 1;
-            for (j = i + 2; j < nk && j - i <= maxSpan; j++) {
-                ok = true;
-                const span = times[j] - times[i];
-                for (k = i + 1; k < j && ok; k++) {
-                    interp(i, j, span > 0 ? (times[k] - times[i]) / span : 0);
-                    for (c = 0; c < n; c++) if (Math.abs(tmp[c] - vals[k * n + c]) > tol) { ok = false; break; }
-                }
-                if (!ok) break;
-                best = j;
-            }
-            keep.push(best);
-            i = best;
-        }
-        return keep;
-    }
-
-    // Remove nodes (the skipped wireframe overlay) and renumber every reference to a node.
-    // Changes the list in place and returns the new index of the scene root.
-    function removeNodes(nodes, skins, animations, drop, rootIdx) {
-        let remap = [], kept = [], i;
-        for (i = 0; i < nodes.length; i++) {
-            if (drop[i]) remap.push(-1);
-            else { remap.push(kept.length); kept.push(nodes[i]); }
-        }
-        kept.forEach((n) => {
-            if (!n.children) return;
-            const c2 = [];
-            n.children.forEach((c) => { if (remap[c] >= 0) c2.push(remap[c]); });
-            n.children = c2;
-        });
-        skins.forEach((sk) => {
-            sk.joints = sk.joints.map((j) => remap[j]);
-            if (typeof sk.skeleton === 'number') sk.skeleton = remap[sk.skeleton];
-        });
-        (animations || []).forEach((a) => {
-            a.channels.forEach((c) => {
-                if (c.target && typeof c.target.node === 'number') c.target.node = remap[c.target.node];
-            });
-        });
-        nodes.length = 0;
-        kept.forEach((n) => { nodes.push(n); });
-        return remap[rootIdx];
-    }
-
-    window.attachbody = (obj) => {
-        try {
-            if (!obj || obj._faked === true) return;
-            const name = obj._name;
-            const ssName = obj.stateset && obj.stateset._name;
-            const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
-            if (!name && !ssName && !pName) return;
-            obj._faked = true;
-            if (name === 'composer layer' || name === 'Ground - Geometry') return;
-            
-            // Dedupe: viewer re-instantiates meshes when WebGL contexts
-            // get recycled. A new obj has _faked = false again, so the
-            // basic guard doesn't catch it. Merge when name, vertex count
-            // and the sampled vertex data (geomKey) all match.
-            // M_Patriot_Radar_Tires legitimately appears twice with
-            // DIFFERENT vertex counts, so this won't merge them.
-            const displayName = ssName || name || '';
-            const vcount = (obj._attributes && obj._attributes.Vertex &&
-                        obj._attributes.Vertex._elements)
-                        ? obj._attributes.Vertex._elements.length : 0;
-            // Name + vertex count alone is not enough: big models are split into unnamed chunks that
-            // often have the same vertex count (e.g. 65532), so also compare sampled vertex data.
-            const gk = geomKey(obj);
-            for (let i = 0; i < window.allmodel.length; i++) {
-                const ex = window.allmodel[i];
-                if (!ex) continue;
-                const exName = (ex.stateset && ex.stateset._name) || ex._name || '';
-                if (exName !== displayName) continue;
-                const exVcount = (ex._attributes && ex._attributes.Vertex &&
-                                ex._attributes.Vertex._elements)
-                            ? ex._attributes.Vertex._elements.length : 0;
-                if (exVcount === vcount && geomKey(ex) === gk) {
-                    // Same name + vertex count but a different world position may be a
-                    // genuine second instance (e.g. repeated parts), not a re-instantiation.
-                    // Animated parents also move a mesh, so by default this only warns and
-                    // still merges (unchanged behaviour). Set DEDUPE_STRICT_WORLD to keep both.
-                    let wNew = computeWorldMatrix(obj), wEx = computeWorldMatrix(ex), wd = 0;
-                    for (let wi = 12; wi < 15; wi++) wd = Math.max(wd, Math.abs(wNew[wi] - wEx[wi]));
-                    if (wd > 1e-3) {
-                        warn('attachbody: "' + displayName + '" matches an existing mesh but sits ' +
-                             wd.toFixed(4) + ' away; ' +
-                             (CONFIG.DEDUPE_STRICT_WORLD ? 'keeping both' : 'merging (DEDUPE_STRICT_WORLD off)'));
-                        if (CONFIG.DEDUPE_STRICT_WORLD) continue;
-                    }
-                    // Replace so the latest instance (with live palette)
-                    // is what we read from during recording.
-                    window.allmodel[i] = obj;
-                    return;
-                }
-            }
-            window.allmodel.push(obj);
-        } catch (e) { err('attachbody', e.message); }
-    };
-
-    // ====================================================================
-    // Recorder
-    // ====================================================================
     // Morph targets: the viewer keeps target k's absolute vertex data in attribute
     // Vertex_k (Normal_k) and the live blend weights in obj._targetWeights.
     function morphTargetCount(obj) {
@@ -1754,43 +1490,6 @@
             if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
         }
         return n;
-    }
-
-    function unitNormals(a) {
-        let o = new Float32Array(a.length), i, x, y, z, l;
-        for (i = 0; i + 2 < a.length; i += 3) {
-            x = a[i]; y = a[i + 1]; z = a[i + 2];
-            l = Math.sqrt(x * x + y * y + z * z);
-            if (l > 1e-12) { o[i] = x / l; o[i + 1] = y / l; o[i + 2] = z / l; }
-            else { o[i] = 0; o[i + 1] = 1; o[i + 2] = 0; }
-        }
-        return o;
-    }
-
-    function snapshotFrame() {
-        const meshesOut = [];
-        window.allmodel.forEach((obj) => {
-            const world = computeWorldMatrix(obj);
-            let wts = null;
-            try {
-                const nT = morphTargetCount(obj);
-                if (nT && obj._targetWeights) {
-                    wts = new Float32Array(nT);
-                    for (let wi = 0; wi < nT; wi++) wts[wi] = obj._targetWeights[wi] || 0;
-                }
-            } catch (e) {}
-            let pal = null;
-            try {
-                const impl = obj._rigTransformImplementation;
-                if (impl && impl._skinningAttribute && impl._skinningAttribute._matrixPalette) {
-                    const src = impl._skinningAttribute._matrixPalette;
-                    pal = new Float32Array(src.length);
-                    for (let i = 0; i < src.length; i++) pal[i] = src[i];
-                }
-            } catch (e) {}
-            meshesOut.push({ world, palette: pal, weights: wts });
-        });
-        return { meshes: meshesOut };
     }
 
     // ====================================================================
@@ -1882,6 +1581,261 @@
         }
         rig.cache.set(pal, L);
         return L;
+    }
+
+    // ====================================================================
+    // Viewer access: animation manager and clip list
+    // ====================================================================
+    let _clipMgrCache = null;
+
+    function findAnimationManager() {
+        if (_clipMgrCache && _clipMgrCache._instanceAnimations) return _clipMgrCache;
+        let cur = window.allmodel[0], guard = 0;
+        while (cur && guard++ < 64) {
+            const cbs = cur._updateCallbacks || [];
+            for (let i = 0; i < cbs.length; i++) {
+                const c = cbs[i];
+                if (c && c._instanceAnimations && typeof c.stopAllAnimation === 'function') {
+                    _clipMgrCache = c;
+                    return c;
+                }
+            }
+            cur = cur._parents && cur._parents[0];
+        }
+        return null;
+    }
+
+    function getClipCount() {
+        const mgr = findAnimationManager();
+        return mgr ? Object.keys(mgr._instanceAnimations).length : 0;
+    }
+
+    function waitFrames(n, cb) {
+        if (n <= 0) { cb(); return; }
+        requestAnimationFrame(() => { waitFrames(n - 1, cb); });
+    }
+
+    function activeClipUids(mgr) {
+        const out = [];
+        const list = mgr._activeAnimationList || [];
+        for (let i = 0; i < list.length; i++) out.push(list[i].name);
+        return out;
+    }
+
+    // UI class names can change; try the known selector first, then looser ones.
+    // Non-clip items are harmless: discovery skips any item that activates no clip.
+    const CLIP_ITEM_SELECTORS = [
+        '.animation-list .animation-item',
+        '[class*="animation"][class*="list"] li',
+        'li[class*="animation-item"]'
+    ];
+
+    function getClipItems() {
+        for (let s = 0; s < CLIP_ITEM_SELECTORS.length; s++) {
+            const found = document.querySelectorAll(CLIP_ITEM_SELECTORS[s]);
+            if (found.length) return found;
+        }
+        return [];
+    }
+
+    // ====================================================================
+    // Capture hooks: textures (drawhookcanvas, drawhookimg)
+    // ====================================================================
+    const _usedTextureNames = {};
+
+    function sanitizeTextureName(raw) {
+        if (!raw) return '';
+        let s = String(raw);
+        try { s = decodeURIComponent(s); } catch (e) {}
+        s = s.replace(/\.(jpe?g|png|webp|gif|ktx2?|basis|tga|bmp)$/i, '');
+        s = s.replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').trim();
+        return s;
+    }
+
+    function deriveTextureName(url) {
+        if (!url) return 'texture';
+        const clean = String(url).split('?')[0].split('#')[0];
+        const base = clean.substring(clean.lastIndexOf('/') + 1);
+        const s = sanitizeTextureName(base);
+        return s || 'texture';
+    }
+
+    function pickTextureName(imagemodel, url) {
+        // Prefer Sketchfab's metadata name (semantic, e.g.
+        // "Patriot_Radar_Body_D_Desert"). Fall back to URL base if
+        // metadata is missing or empty.
+        const metaName = imagemodel && imagemodel.attributes && imagemodel.attributes.name;
+        const s = sanitizeTextureName(metaName);
+        if (s) return s;
+        return deriveTextureName(url);
+    }
+
+    function normalizeUrl(u) {
+        if (!u) return '';
+        return String(u).split('?')[0].split('#')[0].replace(/\/+$/, '');
+    }
+
+    window.drawhookcanvas = (e, imagemodel) => {
+        try {
+            if (!e) return e;
+            // 32/64/128 px square images are usually low-res placeholders of a bigger texture; they are
+            // skipped only while a larger variant exists (a texture whose real size is 128 px is kept).
+            const isSmall = (e.width === 128 && e.height === 128) ||
+                          (e.width === 32  && e.height === 32)  ||
+                          (e.width === 64  && e.height === 64);
+            if (isSmall && !(imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images)) return e;
+            if (imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images) {
+                const alpha = e.options.format;
+                let url_image = e.url, max_size = 0, obr = e;
+                imagemodel.attributes.images.forEach((img) => {
+                    const ok = alpha === 'A' ? img.options.format === alpha : true;
+                    let d = img.width; while (d > 0 && d % 2 === 0) d = d / 2;
+                    if (img.size > max_size && ok && d === 1) {
+                        max_size = img.size; url_image = img.url; obr = img;
+                    }
+                });
+                if (isSmall && !(obr && obr.width <= e.width)) return e;   // a larger variant will come
+                if (!saveimagecache2[url_image]) {
+                    const base = pickTextureName(imagemodel, url_image);
+                    let texName = base, n = 1;
+                    while (_usedTextureNames[texName]) texName = `${base}_${n++}`;
+                    _usedTextureNames[texName] = true;
+                    saveimagecache2[url_image] = { name: texName };
+                }
+                return obr;
+            }
+        } catch (e2) { warn('drawhookcanvas', e2.message); }
+        return e;
+    };
+
+    window.drawhookimg = (gl, t) => {
+        try {
+            if (!t || !t[5]) return;   // this runs per draw: a missing image must not warn every frame
+            const url = t[5].currentSrc, width = t[5].width, height = t[5].height;
+            if (!saveimagecache2[url]) return;
+            if (saveimagecache2[url].dataURL) return;
+            const data = new Uint8Array(width * height * 4);
+            gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+            const hh = height / 2 | 0, bpr = width * 4, temp = new Uint8Array(width * 4);
+            for (let y = 0; y < hh; ++y) {
+                const t0 = y * bpr, b0 = (height - y - 1) * bpr;
+                temp.set(data.subarray(t0, t0 + bpr));
+                data.copyWithin(t0, b0, b0 + bpr);
+                data.set(temp, b0);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            const id = ctx.createImageData(width, height);
+            id.data.set(data);
+            ctx.putImageData(id, 0, 0);
+            const isJpeg = /\.(jpe?g)(?:\?|$)/i.test(url);
+            const mime   = isJpeg ? 'image/jpeg' : 'image/png';
+            const ext    = isJpeg ? '.jpg' : '.png';
+            const q      = isJpeg ? 0.92 : undefined;
+            const name   = saveimagecache2[url].name + ext;
+            saveimagecache2[url].fileExt = ext;
+            saveimagecache2[url].dataURL = true;   // capture flag only (a base64 copy was never read)
+            canvas.toBlob((b) => { objects[name] = b; canvas.width = 0; }, mime, q);
+        } catch (e) { warn('drawhookimg', e.message); }
+    };
+
+    // ====================================================================
+    // Capture hooks: meshes (attachbody)
+    // ====================================================================
+    function geomKey(o, noIndices) {
+        const v = o && o._attributes && o._attributes.Vertex && o._attributes.Vertex._elements;
+        if (!v || !v.length) return '';
+        let n = v.length, parts = [n], k;
+        for (k = 0; k < 16; k++) parts.push(v[Math.floor(k * (n - 1) / 15)]);
+        if (!noIndices) {
+            const pr = o._primitives && o._primitives[0];
+            parts.push(pr && pr.indices && pr.indices._elements ? pr.indices._elements.length : -1);
+        }
+        return parts.join(',');
+    }
+
+    window.attachbody = (obj) => {
+        try {
+            if (!obj || obj._faked === true) return;
+            const name = obj._name;
+            const ssName = obj.stateset && obj.stateset._name;
+            const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
+            if (!name && !ssName && !pName) return;
+            obj._faked = true;
+            if (name === 'composer layer' || name === 'Ground - Geometry') return;
+            
+            // Dedupe: viewer re-instantiates meshes when WebGL contexts
+            // get recycled. A new obj has _faked = false again, so the
+            // basic guard doesn't catch it. Merge when name, vertex count
+            // and the sampled vertex data (geomKey) all match.
+            // M_Patriot_Radar_Tires legitimately appears twice with
+            // DIFFERENT vertex counts, so this won't merge them.
+            const displayName = ssName || name || '';
+            const vcount = (obj._attributes && obj._attributes.Vertex &&
+                        obj._attributes.Vertex._elements)
+                        ? obj._attributes.Vertex._elements.length : 0;
+            // Name + vertex count alone is not enough: big models are split into unnamed chunks that
+            // often have the same vertex count (e.g. 65532), so also compare sampled vertex data.
+            const gk = geomKey(obj);
+            for (let i = 0; i < window.allmodel.length; i++) {
+                const ex = window.allmodel[i];
+                if (!ex) continue;
+                const exName = (ex.stateset && ex.stateset._name) || ex._name || '';
+                if (exName !== displayName) continue;
+                const exVcount = (ex._attributes && ex._attributes.Vertex &&
+                                ex._attributes.Vertex._elements)
+                            ? ex._attributes.Vertex._elements.length : 0;
+                if (exVcount === vcount && geomKey(ex) === gk) {
+                    // Same name + vertex count but a different world position may be a
+                    // genuine second instance (e.g. repeated parts), not a re-instantiation.
+                    // Animated parents also move a mesh, so by default this only warns and
+                    // still merges (unchanged behaviour). Set DEDUPE_STRICT_WORLD to keep both.
+                    let wNew = computeWorldMatrix(obj), wEx = computeWorldMatrix(ex), wd = 0;
+                    for (let wi = 12; wi < 15; wi++) wd = Math.max(wd, Math.abs(wNew[wi] - wEx[wi]));
+                    if (wd > 1e-3) {
+                        warn('attachbody: "' + displayName + '" matches an existing mesh but sits ' +
+                             wd.toFixed(4) + ' away; ' +
+                             (CONFIG.DEDUPE_STRICT_WORLD ? 'keeping both' : 'merging (DEDUPE_STRICT_WORLD off)'));
+                        if (CONFIG.DEDUPE_STRICT_WORLD) continue;
+                    }
+                    // Replace so the latest instance (with live palette)
+                    // is what we read from during recording.
+                    window.allmodel[i] = obj;
+                    return;
+                }
+            }
+            window.allmodel.push(obj);
+        } catch (e) { err('attachbody', e.message); }
+    };
+
+    // ====================================================================
+    // Recorder: frames, single clip, all clips
+    // ====================================================================
+    function snapshotFrame() {
+        const meshesOut = [];
+        window.allmodel.forEach((obj) => {
+            const world = computeWorldMatrix(obj);
+            let wts = null;
+            try {
+                const nT = morphTargetCount(obj);
+                if (nT && obj._targetWeights) {
+                    wts = new Float32Array(nT);
+                    for (let wi = 0; wi < nT; wi++) wts[wi] = obj._targetWeights[wi] || 0;
+                }
+            } catch (e) {}
+            let pal = null;
+            try {
+                const impl = obj._rigTransformImplementation;
+                if (impl && impl._skinningAttribute && impl._skinningAttribute._matrixPalette) {
+                    const src = impl._skinningAttribute._matrixPalette;
+                    pal = new Float32Array(src.length);
+                    for (let i = 0; i < src.length; i++) pal[i] = src[i];
+                }
+            } catch (e) {}
+            meshesOut.push({ world, palette: pal, weights: wts });
+        });
+        return { meshes: meshesOut };
     }
 
     // True when a frame at time t should be kept for the chosen RECORD_FPS (0 = keep every frame).
@@ -1981,94 +1935,6 @@
     function setRecLabel(text) {
         const el = document.getElementById('recBtnLabel');
         if (el) el.textContent = text;
-    }
-
-    // ---------------- progress bars: stage (k of n) and sub-stage ----------------
-    let _progHideTimer = null;
-    function progStage(k, n, label) {
-        const box = document.getElementById('ripper-progress');
-        if (!box) return;
-        clearTimeout(_progHideTimer);
-        box.style.display = 'flex';
-        box.classList.remove('rp-err');
-        document.getElementById('rp-stage-fill').style.width = `${Math.round(100 * k / n)}%`;
-        document.getElementById('rp-stage-label').textContent = `${k}/${n} ${label}`;
-        progSub(0, '');
-    }
-    // frac < 0: work without a measurable fraction (striped bar)
-    function progSub(frac, label) {
-        const fill = document.getElementById('rp-sub-fill');
-        if (!fill) return;
-        const busy = frac < 0;
-        fill.classList.toggle('rp-busy', busy);
-        fill.style.width = busy ? '100%' : `${Math.round(100 * Math.max(0, Math.min(1, frac)))}%`;
-        const l = document.getElementById('rp-sub-label');
-        if (l) l.textContent = label || '';
-    }
-    function progDone(label, isErr) {
-        const box = document.getElementById('ripper-progress');
-        if (!box) return;
-        box.classList.toggle('rp-err', !!isErr);
-        document.getElementById('rp-stage-fill').style.width = '100%';
-        document.getElementById('rp-stage-label').textContent = label;
-        progSub(1, isErr ? i18n('pr_see_console') : '');
-        clearTimeout(_progHideTimer);
-        _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
-    }
-
-    // ====================================================================
-    // Animation clips
-    // ====================================================================
-    let _clipMgrCache = null;
-
-    function findAnimationManager() {
-        if (_clipMgrCache && _clipMgrCache._instanceAnimations) return _clipMgrCache;
-        let cur = window.allmodel[0], guard = 0;
-        while (cur && guard++ < 64) {
-            const cbs = cur._updateCallbacks || [];
-            for (let i = 0; i < cbs.length; i++) {
-                const c = cbs[i];
-                if (c && c._instanceAnimations && typeof c.stopAllAnimation === 'function') {
-                    _clipMgrCache = c;
-                    return c;
-                }
-            }
-            cur = cur._parents && cur._parents[0];
-        }
-        return null;
-    }
-
-    function getClipCount() {
-        const mgr = findAnimationManager();
-        return mgr ? Object.keys(mgr._instanceAnimations).length : 0;
-    }
-
-    function waitFrames(n, cb) {
-        if (n <= 0) { cb(); return; }
-        requestAnimationFrame(() => { waitFrames(n - 1, cb); });
-    }
-
-    function activeClipUids(mgr) {
-        const out = [];
-        const list = mgr._activeAnimationList || [];
-        for (let i = 0; i < list.length; i++) out.push(list[i].name);
-        return out;
-    }
-
-    // UI class names can change; try the known selector first, then looser ones.
-    // Non-clip items are harmless: discovery skips any item that activates no clip.
-    const CLIP_ITEM_SELECTORS = [
-        '.animation-list .animation-item',
-        '[class*="animation"][class*="list"] li',
-        'li[class*="animation-item"]'
-    ];
-
-    function getClipItems() {
-        for (let s = 0; s < CLIP_ITEM_SELECTORS.length; s++) {
-            const found = document.querySelectorAll(CLIP_ITEM_SELECTORS[s]);
-            if (found.length) return found;
-        }
-        return [];
     }
 
     // Click list item k (the viewer does its own stop/start) and wait.
@@ -2383,561 +2249,12 @@
         }
     }
 
-    // ====================================================================
-    // UI panel
-    // ====================================================================
     // A hidden tab stops requestAnimationFrame: the viewer stops rendering and recording skips frames.
     document.addEventListener('visibilitychange', () => {
         if (document.hidden && (window.animationRecording || window.clipRecording)) {
             warn('tab hidden during recording: rendering pauses, frames will be skipped or the clip may be truncated; keep the tab visible');
         }
     });
-
-    // Builds the panel again (after a language change), at the same place.
-    let _panelTimers = [];
-    function rebuildPanel(keepOpen) {
-        const old = document.getElementById('ripper-panel');
-        const pos = old ? { left: old.style.left, top: old.style.top, right: old.style.right } : null;
-        _panelTimers.forEach(clearInterval); _panelTimers = [];
-        if (old) old.remove();
-        button_dw = false;
-        addbtnfunc(true, keepOpen, pos);
-    }
-
-    function addbtnfunc(rebuilt, keepOpen, keepPos) {
-        if (button_dw) return;
-        if (!document.body) { setTimeout(addbtnfunc, 500); return; }
-        if (document.getElementById('ripper-panel')) { button_dw = true; return; }
-
-        if (!document.getElementById('ripper-style')) {
-            const css = document.createElement('style');
-            css.id = 'ripper-style';
-            css.textContent = [
-                '#ripper-panel{position:fixed;top:70px;right:16px;z-index:2147483647;width:212px;box-sizing:border-box;background:rgba(24,25,28,.94);',
-                'backdrop-filter:blur(6px);border:1px solid #3a3d42;border-radius:12px;padding:10px;font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;',
-                'color:#e8eaed;display:flex;flex-direction:column;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.55)}',
-                '#ripper-panel .rp-head{display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid #3a3d42}',
-                '#ripper-panel .rp-title{flex:1;font-weight:700;letter-spacing:.06em;font-size:11px;color:#ff9f43;cursor:move;user-select:none}',
-                '#ripper-panel .rp-gear{cursor:pointer;color:#9aa0a6;font-size:15px;line-height:1;padding:2px 4px;border-radius:6px;user-select:none}',
-                '#ripper-panel .rp-gear:hover{background:#2f3236;color:#fff}',
-                '#ripper-panel .rp-sec{font-size:10px;font-weight:600;letter-spacing:.08em;color:#9aa0a6;text-transform:uppercase;margin-top:2px}',
-                '#ripper-panel .rp-row{display:flex;gap:6px}',
-                '#ripper-panel .rp-btn{flex:1;padding:8px 6px;border:0;border-radius:8px;color:#fff;font:600 11px system-ui,sans-serif;letter-spacing:.03em;cursor:pointer;',
-                'transition:background-color .15s,opacity .15s,transform .05s}',
-                '#ripper-panel .rp-btn:active{transform:translateY(1px)}',
-                '#ripper-panel .rp-dl{background:#1a73e8}#ripper-panel .rp-dl:hover{background:#1765cc}',
-                '#ripper-panel .rp-rec{background:#c5221f}#ripper-panel .rp-rec:hover{background:#a50e0e}',
-                '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
-                '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
-                '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
-                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;overflow-wrap:anywhere}',
-                '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
-                '#ripper-progress .rp-bar.rp-thin{height:4px}',
-                '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
-                '#ripper-progress .rp-thin .rp-fill{background:#5f9cf0}',
-                '#ripper-progress .rp-fill.rp-busy{background:repeating-linear-gradient(45deg,#5f9cf0 0 8px,#3c6fc2 8px 16px);background-size:22px 22px;animation:rp-stripe .7s linear infinite}',
-                '@keyframes rp-stripe{to{background-position:22px 0}}',
-                '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
-                '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
-                '#ripper-panel.rp-wide{width:270px}',
-                '#ripper-config>div>span{flex:1;min-width:0}',
-                '#ripper-config select{max-width:55%}',
-                '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
-            ].join('');
-            document.head.appendChild(css);
-        }
-
-        const panel = document.createElement('div');
-        panel.id = 'ripper-panel';
-
-        const titleRow = document.createElement('div');
-        titleRow.className = 'rp-head';
-
-        const title = document.createElement('div');
-        title.textContent = 'MODEL RIPPER';   // i18n-ok (name of the script)
-        title.className = 'rp-title';
-        titleRow.appendChild(title);
-
-        const gear = document.createElement('span');
-        gear.textContent = '⚙';
-        gear.title = i18n('settings');
-        gear.className = 'rp-gear';
-        titleRow.appendChild(gear);
-
-        panel.appendChild(titleRow);
-
-        function section(text) {
-            const d = document.createElement('div');
-            d.className = 'rp-sec'; d.textContent = text;
-            panel.appendChild(d);
-        }
-        function button(id, text, cls, onClick) {
-            const b = document.createElement('button');
-            if (id) b.id = id;
-            b.type = 'button';
-            b.className = `rp-btn ${cls}`;
-            b.textContent = text;
-            b.addEventListener('click', onClick);
-            return b;
-        }
-
-        section(i18n('sec_download'));
-        const dlRow = document.createElement('div');
-        dlRow.className = 'rp-row';
-        const btnDL = button('dlGlbBtn', i18n('btn_glb'), 'rp-dl', () => { downloadGLB('glb'); });
-        btnDL.title = i18n('tip_glb');
-        const btnFBX = button('dlFbxBtn', i18n('btn_fbx'), 'rp-dl', () => { downloadGLB('fbx'); });
-        btnFBX.title = i18n('tip_fbx');
-        dlRow.appendChild(btnDL);
-        dlRow.appendChild(btnFBX);
-        panel.appendChild(dlRow);
-
-        section(i18n('sec_animation'));
-        const btnRec = button('recBtnLabel', window.animationRecording ? i18n('btn_stop') : i18n('btn_rec_single'), 'rp-rec', () => {
-            if (!window.animationRecording) startRecording(); else stopRecording();
-        });
-        panel.appendChild(btnRec);
-
-        const btnAll = button('recAllBtn', window.clipRecording ? i18n('btn_cancel') : i18n('btn_rec_all'), 'rp-rec', () => {
-            if (window.clipRecording) {
-                window.clipCancel = true;
-                setRecAllLabel(i18n('btn_cancelling'));
-                log('record-all: cancel requested');
-                return;
-            }
-            recordAllClips();
-        });
-        panel.appendChild(btnAll);
-
-        const progBox = document.createElement('div');
-        progBox.id = 'ripper-progress';
-        progBox.innerHTML = '<div class="rp-lab"><span id="rp-stage-label"></span></div>'
-            + '<div class="rp-bar"><div class="rp-fill" id="rp-stage-fill"></div></div>'
-            + '<div class="rp-bar rp-thin"><div class="rp-fill" id="rp-sub-fill"></div></div>'
-            + '<div class="rp-lab"><span id="rp-sub-label"></span></div>';
-        panel.appendChild(progBox);
-
-        // Buttons that can't do anything right now are greyed out:
-        // RECORD SINGLE CLIP needs 1+ clips, RECORD ALL CLIPS needs 2+, downloads wait for recordings.
-        function setOff(b, off, why) {
-            b.disabled = off;
-            b.title = off ? why : (b.dataset.tip || '');
-        }
-        btnDL.dataset.tip = btnDL.title; btnFBX.dataset.tip = btnFBX.title;
-        function refreshAllBtn() {
-            let n = 0;
-            try { n = getClipCount(); } catch (e) {}
-            const recBusy = window.animationRecording || window.clipRecording;
-            btnRec.classList.toggle('rp-on', !!window.animationRecording);
-            btnAll.classList.toggle('rp-on', !!window.clipRecording);
-            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
-            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? i18n('tip_one_clip') : n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
-            setOff(btnDL, recBusy || _exporting, i18n('tip_busy_dl'));
-            setOff(btnFBX, recBusy || _exporting, i18n('tip_busy_dl'));
-        }
-        refreshAllBtn();
-        _panelTimers.push(setInterval(refreshAllBtn, 500));
-
-        const status = document.createElement('div');
-        status.id = 'ripper-status';
-        status.textContent = i18n('st_idle');
-        panel.appendChild(status);
-
-        // ---- config form (hidden until gear clicked) ----
-        const configDiv = document.createElement('div');
-        configDiv.id = 'ripper-config';
-        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
-
-        const rowL = document.createElement('div');
-        rowL.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelL = document.createElement('span');
-        labelL.textContent = i18n('set_language');
-        labelL.title = i18n('set_language_tip');
-        rowL.appendChild(labelL);
-        const selL = document.createElement('select');
-        selL.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])).forEach((o) => {
-            const op = document.createElement('option');
-            op.value = o[0]; op.textContent = o[1];
-            if ((CONFIG.LANGUAGE || 'auto') === o[0]) op.selected = true;
-            selL.appendChild(op);
-        });
-        selL.addEventListener('change', () => {
-            CONFIG.LANGUAGE = selL.value;
-            saveConfig();
-            log(`language set to ${selL.value} (${uiLang()})`);
-            rebuildPanel(true);
-        });
-        rowL.appendChild(selL);
-        configDiv.appendChild(rowL);
-
-        const row1 = document.createElement('div');
-        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label1 = document.createElement('span');
-        label1.textContent = i18n('set_max_seconds');
-        label1.title = i18n('set_max_seconds_tip');
-        row1.appendChild(label1);
-        const input1 = document.createElement('input');
-        input1.type = 'number';
-        input1.min = '1';
-        input1.max = '60';
-        input1.value = CONFIG.MAX_RECORD_SECONDS;
-        input1.style.cssText = 'width:52px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        input1.addEventListener('change', () => {
-            let v = parseInt(input1.value, 10);
-            if (isNaN(v) || v < 1) v = 1;
-            if (v > 60) v = 60;
-            input1.value = v;
-            CONFIG.MAX_RECORD_SECONDS = v;
-            saveConfig();
-            log(`max record seconds set to ${v}`);
-        });
-        row1.appendChild(input1);
-        configDiv.appendChild(row1);
-
-        const rowF = document.createElement('div');
-        rowF.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelF = document.createElement('span');
-        labelF.textContent = i18n('set_fps');
-        labelF.title = i18n('set_fps_tip');
-        rowF.appendChild(labelF);
-        const selF = document.createElement('select');
-        selF.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
-            const op = document.createElement('option');
-            op.value = String(o[0]); op.textContent = o[1];
-            if ((+CONFIG.RECORD_FPS || 0) === o[0]) op.selected = true;
-            selF.appendChild(op);
-        });
-        selF.addEventListener('change', () => {
-            CONFIG.RECORD_FPS = parseInt(selF.value, 10) || 0;
-            saveConfig();
-            log(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
-        });
-        rowF.appendChild(selF);
-        configDiv.appendChild(rowF);
-
-        const row2 = document.createElement('div');
-        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label2 = document.createElement('span');
-        label2.textContent = i18n('set_reload');
-        label2.title = i18n('set_reload_tip');
-        row2.appendChild(label2);
-        const check2 = document.createElement('input');
-        check2.type = 'checkbox';
-        check2.checked = CONFIG.AUTO_RELOAD_ON_FAILURE;
-        check2.addEventListener('change', () => {
-            CONFIG.AUTO_RELOAD_ON_FAILURE = check2.checked;
-            saveConfig();
-            log(`auto-reload on failure set to ${check2.checked}`);
-        });
-        row2.appendChild(check2);
-        configDiv.appendChild(row2);
-
-        const row5 = document.createElement('div');
-        row5.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5 = document.createElement('span');
-        label5.textContent = i18n('set_double');
-        label5.title = i18n('set_double_tip');
-        row5.appendChild(label5);
-        const check5 = document.createElement('input');
-        check5.type = 'checkbox';
-        check5.checked = !!CONFIG.DOUBLE_SIDED;
-        check5.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED = check5.checked;
-            saveConfig();
-            log(`double sided set to ${check5.checked}`);
-        });
-        row5.appendChild(check5);
-        configDiv.appendChild(row5);
-
-        const row5b = document.createElement('div');
-        row5b.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5b = document.createElement('span');
-        label5b.textContent = i18n('set_single_auto');
-        label5b.title = i18n('set_single_auto_tip');
-        row5b.appendChild(label5b);
-        const check5b = document.createElement('input');
-        check5b.type = 'checkbox';
-        check5b.checked = !!CONFIG.DOUBLE_SIDED_AUTO;
-        check5b.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED_AUTO = check5b.checked;
-            saveConfig();
-            log(`auto single sided set to ${check5b.checked}`);
-        });
-        row5b.appendChild(check5b);
-        configDiv.appendChild(row5b);
-
-        const row5c = document.createElement('div');
-        row5c.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5c = document.createElement('span');
-        label5c.textContent = i18n('set_slivers');
-        label5c.title = i18n('set_slivers_tip');
-        row5c.appendChild(label5c);
-        const check5c = document.createElement('input');
-        check5c.type = 'checkbox';
-        check5c.checked = !!CONFIG.DROP_STRIP_SLIVERS;
-        check5c.addEventListener('change', () => {
-            CONFIG.DROP_STRIP_SLIVERS = check5c.checked;
-            saveConfig();
-            log(`drop strip slivers set to ${check5c.checked}`);
-        });
-        row5c.appendChild(check5c);
-        configDiv.appendChild(row5c);
-
-        const row5d = document.createElement('div');
-        row5d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5d = document.createElement('span');
-        label5d.textContent = i18n('set_reduce');
-        label5d.title = i18n('set_reduce_tip');
-        row5d.appendChild(label5d);
-        const check5d = document.createElement('input');
-        check5d.type = 'checkbox';
-        check5d.checked = !!CONFIG.REDUCE_KEYS;
-        check5d.addEventListener('change', () => {
-            CONFIG.REDUCE_KEYS = check5d.checked;
-            saveConfig();
-            log(`reduce keyframes set to ${check5d.checked}`);
-        });
-        row5d.appendChild(check5d);
-        configDiv.appendChild(row5d);
-
-        const row5e = document.createElement('div');
-        row5e.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5e = document.createElement('span');
-        label5e.textContent = i18n('set_still');
-        label5e.title = i18n('set_still_tip');
-        row5e.appendChild(label5e);
-        const check5e = document.createElement('input');
-        check5e.type = 'checkbox';
-        check5e.checked = !!CONFIG.KEEP_STILL_CLIPS;
-        check5e.addEventListener('change', () => {
-            CONFIG.KEEP_STILL_CLIPS = check5e.checked;
-            saveConfig();
-            log(`keep still clips set to ${check5e.checked}`);
-        });
-        row5e.appendChild(check5e);
-        configDiv.appendChild(row5e);
-
-        const row6 = document.createElement('div');
-        row6.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label6 = document.createElement('span');
-        label6.textContent = i18n('set_vcolor');
-        label6.title = i18n('set_vcolor_tip');
-        row6.appendChild(label6);
-        const check6 = document.createElement('input');
-        check6.type = 'checkbox';
-        check6.checked = !!CONFIG.VERTEX_COLOR_SRGB;
-        check6.addEventListener('change', () => {
-            CONFIG.VERTEX_COLOR_SRGB = check6.checked;
-            saveConfig();
-            log(`vertex color sRGB->linear set to ${check6.checked}`);
-        });
-        row6.appendChild(check6);
-        configDiv.appendChild(row6);
-
-        const row7 = document.createElement('div');
-        row7.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label7 = document.createElement('span');
-        label7.textContent = i18n('set_flat_mr');
-        label7.title = i18n('set_flat_mr_tip');
-        row7.appendChild(label7);
-        const check7 = document.createElement('input');
-        check7.type = 'checkbox';
-        check7.checked = !!CONFIG.FLAT_MR_FROM_VIEWER;
-        check7.addEventListener('change', () => {
-            CONFIG.FLAT_MR_FROM_VIEWER = check7.checked;
-            saveConfig();
-            log(`flat metal/rough from viewer set to ${check7.checked}`);
-        });
-        row7.appendChild(check7);
-        configDiv.appendChild(row7);
-
-        const row8 = document.createElement('div');
-        row8.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label8 = document.createElement('span');
-        label8.textContent = i18n('set_scale');
-        label8.title = i18n('set_scale_tip');
-        row8.appendChild(label8);
-        const input8 = document.createElement('input');
-        // text, not type=number: a number field rejects "0,01" in some browsers and languages
-        input8.type = 'text';
-        input8.inputMode = 'decimal';
-        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
-        const showNum = (v) => String(v).replace('.', decSep);
-        input8.value = showNum(CONFIG.EXPORT_SCALE);
-        input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        input8.addEventListener('change', () => {
-            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
-            if (isNaN(v) || v <= 0) v = 1;
-            input8.value = showNum(v);
-            CONFIG.EXPORT_SCALE = v;
-            saveConfig();
-            log(`export scale set to ${v}`);
-        });
-        row8.appendChild(input8);
-        configDiv.appendChild(row8);
-
-        const row3 = document.createElement('div');
-        row3.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label3 = document.createElement('span');
-        label3.textContent = i18n('set_mr_format');
-        label3.title = i18n('set_mr_format_tip');
-        row3.appendChild(label3);
-        const sel3 = document.createElement('select');
-        sel3.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.MR_TEXTURE_FORMAT === opt[0]) o.selected = true;
-            sel3.appendChild(o);
-        });
-        sel3.addEventListener('change', () => {
-            CONFIG.MR_TEXTURE_FORMAT = sel3.value;
-            saveConfig();
-            log(`metal/rough texture format set to ${sel3.value}`);
-        });
-        row3.appendChild(sel3);
-        configDiv.appendChild(row3);
-
-        const row4 = document.createElement('div');
-        row4.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label4 = document.createElement('span');
-        label4.textContent = i18n('set_rest');
-        label4.title = i18n('set_rest_tip');
-        row4.appendChild(label4);
-        const sel4 = document.createElement('select');
-        sel4.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.REST_POSE_SOURCE === opt[0]) o.selected = true;
-            sel4.appendChild(o);
-        });
-        sel4.addEventListener('change', () => {
-            CONFIG.REST_POSE_SOURCE = sel4.value;
-            saveConfig();
-            log(`rest pose source set to ${sel4.value}`);
-        });
-        row4.appendChild(sel4);
-        configDiv.appendChild(row4);
-
-        panel.appendChild(configDiv);
-
-        // The settings need more room (longer labels in some languages): the panel gets wider while they are open.
-        gear.addEventListener('click', () => {
-            const open = configDiv.style.display === 'none';
-            configDiv.style.display = open ? 'flex' : 'none';
-            panel.classList.toggle('rp-wide', open);
-        });
-        if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
-        if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
-
-        document.body.appendChild(panel);
-        makeDraggable(panel, title);
-        button_dw = true;
-        log(`panel added (language ${uiLang()})`);
-        if (rebuilt) return;   // the checks below run once per page
-
-        // Warn if the bad bundle was served. After 8s, show hint. After
-        // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
-        setTimeout(() => {
-            if (window._anyAnchorsMatched) return;
-            const s = document.getElementById('ripper-status');
-            if (s) {
-                s.textContent = i18n('st_no_anchors');
-                s.style.color = '#f80';
-            }
-            log('no anchors matched after 8s; bundle is the incompatible build');
-        }, 8000);
-
-        setTimeout(() => {
-            reportMissingPatches();   // anchors matched, but maybe not all five patches
-            if (window._anyAnchorsMatched) return;
-            let already;
-            try { already = sessionStorage.getItem('ripper_reloaded'); } catch (e) { already = '1'; }
-            if (already) return;
-            if (!CONFIG.AUTO_RELOAD_ON_FAILURE) return;
-            try { sessionStorage.setItem('ripper_reloaded', '1'); if (sessionStorage.getItem('ripper_reloaded') !== '1') return; } catch (e) { return; }
-            log('no anchors after 12s, auto-reloading once');
-            location.reload();
-        }, 12000);
-
-        setInterval(() => {
-            const s = document.getElementById('ripper-status');
-            if (!s) return;
-            if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
-            const busy = window.animationRecording || window.clipRecording;
-            const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
-            s.textContent = i18n('st_line', { state, m: window.allmodel.length, f: window.recordedFrames.length, c: getClipCount() })
-                          + (window.clips.length ? i18n('st_rec_clips', { n: window.clips.length }) : '');
-            s.style.color = busy ? '#f28b82' : '#9aa0a6';
-        }, 500);
-
-        // Document listeners are added once; they move whichever panel is current.
-        document.addEventListener('mousemove', (e) => {
-            const d = _panelDrag;
-            if (!d) return;
-            d.el.style.left = `${e.clientX - d.ox}px`;
-            d.el.style.top  = `${e.clientY - d.oy}px`;
-            d.el.style.right = 'auto';
-        });
-        document.addEventListener('mouseup', () => { _panelDrag = null; });
-    }
-
-    // Drag state of the panel title. The mousedown handler is set on every
-    // build (also after a language change), so a rebuilt panel can be moved too.
-    let _panelDrag = null;   // { el, ox, oy } while the title is held
-    function makeDraggable(el, handle) {
-        handle.addEventListener('mousedown', (e) => {
-            _panelDrag = { el, ox: e.clientX - el.offsetLeft, oy: e.clientY - el.offsetTop };
-            e.preventDefault();
-        });
-    }
-
-    // ====================================================================
-    // parseobj
-    // ====================================================================
-    function parseobj(obj) {
-        const list = [];
-        (obj._primitives || []).forEach((p) => {
-            if (p && p.indices) list.push({ mode: p.mode, indices: p.indices._elements });
-        });
-        const attr = obj._attributes || {};
-        let joints  = attr.Joints0  || attr.JOINTS_0 || attr.joints0 || attr.Joints  || attr.JOINTS  || attr.Bones || attr.BONES;
-        let weights = attr.Weights0 || attr.WEIGHTS_0 || attr.weights0 || attr.Weights || attr.WEIGHTS || attr.BoneWeights || attr.BONEWEIGHTS;
-        if (joints)  joints  = joints._elements;
-        if (weights) weights = weights._elements;
-        // Sketchfab assigns arbitrary TexCoordN indices per mesh
-        // (e.g. TexCoord0, TexCoord3, TexCoord6 on the same model),
-        // so scan for any TexCoordN key rather than hard-coding.
-        let uvAttr = null;
-        let _uvBestNum = Infinity;
-        for (let _k in attr) {
-            if (!attr.hasOwnProperty(_k)) continue;
-            const _m = /^TexCoord(\d+)$/.exec(_k);
-            if (!_m) continue;
-            const _a = attr[_k];
-            if (!_a || !_a._elements || !_a._elements.length) continue;
-            const _n = parseInt(_m[1], 10);
-            if (_n < _uvBestNum) {
-                _uvBestNum = _n;
-                uvAttr = _a;
-            }
-        }
-
-        return {
-            vertex: attr.Vertex ? attr.Vertex._elements : [],
-            normal: attr.Normal ? attr.Normal._elements : [],
-            uv: uvAttr ? uvAttr._elements : [],
-            color: (attr.Color && attr.Color._elements) ? attr.Color._elements : [],
-            joints,
-            weights,
-            primitives: list
-        };
-    }
 
     // ====================================================================
     // MetallicRoughness merge
@@ -3268,165 +2585,157 @@
     }
 
     // ====================================================================
-    // GLB Export
+    // glTF builder
     // ====================================================================
-    // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
-    function downloadGLB(format) {
-        format = format === 'fbx' ? 'fbx' : 'glb';
-        if (_exporting) { warn('export already running, ignored'); return; }
-        if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
-        _exporting = true;
-        log(`export started (${format.toUpperCase()})`);
-        logViewerCapabilities();
-        const stages = format === 'fbx'
-            ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
-            : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
-        const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
-        stage(0);
-        waitForTextures((got, total, left) => {
-            if (!total) progSub(1, i18n('pr_no_textures'));
-            else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
-            else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
-        })
-            .then(() => {
-                stage(1);
-                // two parts: metal/rough maps, then opacity into base colour alpha
-                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? i18n('pr_mr', { d, n }) : i18n('pr_no_mr')), format === 'fbx');
-            })
-            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? i18n('pr_op', { d, n }) : i18n('pr_no_op'))))
-            .then(() => { stage(2); progSub(-1, i18n('pr_building')); return nextPaint(); })
-            .then(() => {
-                const built = _downloadGLBSync(format === 'fbx');
-                if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
-                return exportFBX(built, stage);
-            })
-            .then(() => { _exporting = false; progDone(i18n('pr_done')); })
-            .catch((e) => {
-                _exporting = false;
-                progDone(i18n('pr_export_failed'), true);
-                err('export failed:', e.message, e.stack);
-            });
-    }
-
-    // Lets the panel paint before a long synchronous step. A hidden tab never fires
-    // requestAnimationFrame, so a timer also resolves it (the export must not stall there).
-    // One line that says which private viewer fields were found. The export reads them
-    // through && chains that give "nothing" when a field is gone, so after a viewer update
-    // this line in a bug report shows what disappeared.
-    function logViewerCapabilities() {
-        try {
-            const all = window.allmodel || [];
-            let rig = 0, pal = 0, matModel = 0, chMap = 0, morph = 0;
-            all.forEach((obj) => {
-                const impl = obj && obj._rigTransformImplementation;
-                if (impl) { rig++; if (impl._skinningAttribute && impl._skinningAttribute._matrixPalette) pal++; }
-                const ch = getMaterialChannels(obj);
-                if (ch) { matModel++; if (ch.__map) chMap++; }
-                try { if (morphTargetCount(obj)) morph++; } catch (e) {}
-            });
-            const mgr = findAnimationManager();
-            let speed = '';
-            if (mgr) { try { speed = `, speed x${typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor}`; } catch (e) {} }
-            log(`viewer: meshes ${all.length}, skinned ${rig} (palette ${pal}/${rig}), morph ${morph}, ` +
-                `material model ${matModel}/${all.length} (channel map ${chMap}/${matModel}), textures seen ${Object.keys(saveimagecache2).length}, ` +
-                `clip manager ${mgr ? `yes (${getClipCount()} clips, ${getClipItems().length} list items${speed})` : 'no'}, ` +
-                `model name label ${document.getElementsByClassName('model-name__label').length ? 'yes' : 'no'}`);
-        } catch (e) { warn('viewer capability check failed:', e.message); }
-    }
-
-    function nextPaint() {
-        return new Promise((r) => {
-            let done = false;
-            const go = () => { if (!done) { done = true; setTimeout(r, 0); } };
-            requestAnimationFrame(go);
-            setTimeout(go, 100);
+    function parseobj(obj) {
+        const list = [];
+        (obj._primitives || []).forEach((p) => {
+            if (p && p.indices) list.push({ mode: p.mode, indices: p.indices._elements });
         });
-    }
-
-    // Zips the model file(s) with the captured textures. extra: { path: Blob }.
-    function packZip(built, files, stage, stageIdx) {
-        stage(stageIdx);
-        const zip = new JSZip();
-        Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
-        for (const tn in built.zipTex) {
-            if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
-                if (built.skipTex && built.skipTex[`textures/${built.zipTex[tn]}`]) continue;
-                zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
+        const attr = obj._attributes || {};
+        let joints  = attr.Joints0  || attr.JOINTS_0 || attr.joints0 || attr.Joints  || attr.JOINTS  || attr.Bones || attr.BONES;
+        let weights = attr.Weights0 || attr.WEIGHTS_0 || attr.weights0 || attr.Weights || attr.WEIGHTS || attr.BoneWeights || attr.BONEWEIGHTS;
+        if (joints)  joints  = joints._elements;
+        if (weights) weights = weights._elements;
+        // Sketchfab assigns arbitrary TexCoordN indices per mesh
+        // (e.g. TexCoord0, TexCoord3, TexCoord6 on the same model),
+        // so scan for any TexCoordN key rather than hard-coding.
+        let uvAttr = null;
+        let _uvBestNum = Infinity;
+        for (let _k in attr) {
+            if (!attr.hasOwnProperty(_k)) continue;
+            const _m = /^TexCoord(\d+)$/.exec(_k);
+            if (!_m) continue;
+            const _a = attr[_k];
+            if (!_a || !_a._elements || !_a._elements.length) continue;
+            const _n = parseInt(_m[1], 10);
+            if (_n < _uvBestNum) {
+                _uvBestNum = _n;
+                uvAttr = _a;
             }
         }
-        (built.extraTex || []).forEach((t) => zip.file(t.path, t.blob, { compression: 'STORE' }));
-        return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
-            (meta) => progSub(meta.percent / 100, `${Math.round(meta.percent)}%`)).then((content) => {
-            saveAs(content, `${built.modelName}.zip`);
-            log('export done:', `${built.modelName}.zip`);
-        }).catch((e) => { throw new Error('zip failed: ' + e.message); });
+
+        return {
+            vertex: attr.Vertex ? attr.Vertex._elements : [],
+            normal: attr.Normal ? attr.Normal._elements : [],
+            uv: uvAttr ? uvAttr._elements : [],
+            color: (attr.Color && attr.Color._elements) ? attr.Color._elements : [],
+            joints,
+            weights,
+            primitives: list
+        };
     }
 
-    // zlib deflate for compressed FBX arrays (CompressionStream 'deflate' = zlib format)
-    function zlibDeflate(u8) {
-        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
-        const cs = new CompressionStream('deflate');
-        const out = new Response(cs.readable).arrayBuffer().then((b) => new Uint8Array(b));
-        const w = cs.writable.getWriter();
-        // A failure is reported through `out` (FbxWriter then writes the array uncompressed);
-        // catch these two so the browser does not also log "Uncaught (in promise)".
-        w.write(u8).catch(() => {}); w.close().catch(() => {});
-        return out;
+    function unitNormals(a) {
+        let o = new Float32Array(a.length), i, x, y, z, l;
+        for (i = 0; i + 2 < a.length; i += 3) {
+            x = a[i]; y = a[i + 1]; z = a[i + 2];
+            l = Math.sqrt(x * x + y * y + z * z);
+            if (l > 1e-12) { o[i] = x / l; o[i + 1] = y / l; o[i + 2] = z / l; }
+            else { o[i] = 0; o[i + 1] = 1; o[i + 2] = 0; }
+        }
+        return o;
     }
 
-    // One channel of an image as a grayscale PNG (FBX has no packed metal/rough map).
-    function splitChannel(blob, channel) {
-        return createImageBitmap(blob).then((bmp) => {
-            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
-            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
-            if (bmp.close) bmp.close();   // release the bitmap memory early
-            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data, k = { R: 0, G: 1, B: 2 }[channel];
-            for (let i = 0; i < d.length; i += 4) { const v = d[i + k]; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
-            cx.putImageData(id, 0, 0);
-            return new Promise((res) => c.toBlob((b) => { c.width = 0; res(b); }, 'image/png'));
+    // The viewer can hold a second copy of a mesh that only has LINES (its wireframe display).
+    // It has the same vertices as the real mesh but no triangles. Returns the index of the real
+    // mesh when obj is such an overlay, otherwise -1. A line mesh with no twin is real and is kept.
+    function wireOverlayTwin(list, idx) {
+        let obj = list[idx], prims = obj && obj._primitives, i, p, hasLines = false, key;
+        if (!prims || !prims.length) return -1;
+        for (i = 0; i < prims.length; i++) {
+            p = prims[i];
+            if (!p || !p.indices) continue;
+            if (p.mode === 1 || p.mode === 2 || p.mode === 3) hasLines = true;
+            else return -1;   // has a triangle (or point) primitive: not an overlay
+        }
+        if (!hasLines) return -1;
+        key = geomKey(obj, true);
+        if (!key) return -1;
+        for (i = 0; i < list.length; i++) {
+            let o2 = list[i], pr2 = o2 && o2._primitives, j, tri = false;
+            if (i === idx || !pr2 || geomKey(o2, true) !== key) continue;
+            for (j = 0; j < pr2.length; j++) {
+                const m2 = pr2[j] && pr2[j].mode;
+                if (pr2[j] && pr2[j].indices && (m2 === undefined || m2 === null || m2 === 4 || m2 === 5 || m2 === 6)) tri = true;
+            }
+            if (tri) return i;
+        }
+        return -1;
+    }
+
+    // Keyframe reduction. Keeps the first and last key, and every key that is needed so that
+    // interpolation between the kept keys stays within tol of each recorded sample (per component).
+    // Rotations (isQuat) are checked with slerp, as glTF interpolates them. A segment spans at most
+    // maxSpan recorded frames, which limits the run time. Returns the indices of the kept keys.
+    function reduceKeys(times, vals, n, tol, isQuat, maxSpan) {
+        let nk = times.length, keep = [0], i = 0, j, k, c, ok, best, tmp = [0, 0, 0, 0];
+        if (nk < 3) { for (k = 1; k < nk; k++) keep.push(k); return keep; }
+        function interp(a, b, u) {
+            const ia = a * n, ib = b * n;
+            if (isQuat && n === 4) {
+                let dt = vals[ia] * vals[ib] + vals[ia + 1] * vals[ib + 1] + vals[ia + 2] * vals[ib + 2] + vals[ia + 3] * vals[ib + 3];
+                let sg = dt < 0 ? -1 : 1, w0, w1;
+                dt = Math.abs(dt);
+                if (dt > 0.9995) { w0 = 1 - u; w1 = u; }
+                else {
+                    const th = Math.acos(Math.min(1, dt)), sn = Math.sin(th);
+                    w0 = Math.sin((1 - u) * th) / sn; w1 = Math.sin(u * th) / sn;
+                }
+                let len = 0;
+                for (c = 0; c < 4; c++) { tmp[c] = w0 * vals[ia + c] + sg * w1 * vals[ib + c]; len += tmp[c] * tmp[c]; }
+                len = Math.sqrt(len) || 1;
+                for (c = 0; c < 4; c++) tmp[c] /= len;
+            } else {
+                for (c = 0; c < n; c++) tmp[c] = vals[ia + c] + (vals[ib + c] - vals[ia + c]) * u;
+            }
+        }
+        while (i < nk - 1) {
+            best = i + 1;
+            for (j = i + 2; j < nk && j - i <= maxSpan; j++) {
+                ok = true;
+                const span = times[j] - times[i];
+                for (k = i + 1; k < j && ok; k++) {
+                    interp(i, j, span > 0 ? (times[k] - times[i]) / span : 0);
+                    for (c = 0; c < n; c++) if (Math.abs(tmp[c] - vals[k * n + c]) > tol) { ok = false; break; }
+                }
+                if (!ok) break;
+                best = j;
+            }
+            keep.push(best);
+            i = best;
+        }
+        return keep;
+    }
+
+    // Remove nodes (the skipped wireframe overlay) and renumber every reference to a node.
+    // Changes the list in place and returns the new index of the scene root.
+    function removeNodes(nodes, skins, animations, drop, rootIdx) {
+        let remap = [], kept = [], i;
+        for (i = 0; i < nodes.length; i++) {
+            if (drop[i]) remap.push(-1);
+            else { remap.push(kept.length); kept.push(nodes[i]); }
+        }
+        kept.forEach((n) => {
+            if (!n.children) return;
+            const c2 = [];
+            n.children.forEach((c) => { if (remap[c] >= 0) c2.push(remap[c]); });
+            n.children = c2;
         });
-    }
-
-    // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
-    function fbxLabel(label) {
-        const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
-        if (!m) return label;
-        const key = 'fbx_' + m[1].replace(/ /g, '_') + (m[2] ? '_n' : '');
-        return (STRINGS.en[key] !== undefined) ? i18n(key, { i: m[2], n: m[3] }) : label;
-    }
-
-    function exportFBX(built, stage) {
-        stage(3);
-        const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
-        return FbxWriter.gltfToFbx(built.gltf, built.bin, {
-            creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
-            fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
-            deflate: zlibDeflate,
-            onProgress: (f, label) => progSub(f, fbxLabel(label)),
-        }).then((res) => {
-            res.warnings.forEach((w) => warn('fbx: ' + w));
-            const st = res.stats;
-            log(`fbx written: ${(res.fbx.byteLength / 1048576).toFixed(1)} MB, models=${st.models} geometries=${st.geometries} materials=${st.materials} textures=${st.textures} clusters=${st.clusters} clips=${st.stacks} curves=${st.curves}`);
-            stage(4);
-            const byUri = {};
-            for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
-            built.extraTex = [];
-            built.skipTex = {};
-            let n = 0;
-            return res.splits.reduce((p, sp) => p.then(() => {
-                progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
-                const src = byUri[sp.src];
-                if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
-                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
-                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
-            }), Promise.resolve()).then(() => {
-                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
-                return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
+        skins.forEach((sk) => {
+            sk.joints = sk.joints.map((j) => remap[j]);
+            if (typeof sk.skeleton === 'number') sk.skeleton = remap[sk.skeleton];
+        });
+        (animations || []).forEach((a) => {
+            a.channels.forEach((c) => {
+                if (c.target && typeof c.target.node === 'number') c.target.node = remap[c.target.node];
             });
         });
+        nodes.length = 0;
+        kept.forEach((n) => { nodes.push(n); });
+        return remap[rootIdx];
     }
 
-    // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
     function _downloadGLBSync(skipGlb) {
         try {
             function pad(o) { return o % 4 ? o + (4 - o % 4) : o; }
@@ -4748,6 +4057,707 @@
             e.message = 'scene build failed: ' + e.message;
             throw e;
         }
+    }
+
+    // ====================================================================
+    // Export: GLB and FBX downloads
+    // ====================================================================
+    // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
+    function downloadGLB(format) {
+        format = format === 'fbx' ? 'fbx' : 'glb';
+        if (_exporting) { warn('export already running, ignored'); return; }
+        if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
+        _exporting = true;
+        log(`export started (${format.toUpperCase()})`);
+        logViewerCapabilities();
+        const stages = format === 'fbx'
+            ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
+            : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
+        const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
+        stage(0);
+        waitForTextures((got, total, left) => {
+            if (!total) progSub(1, i18n('pr_no_textures'));
+            else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
+            else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
+        })
+            .then(() => {
+                stage(1);
+                // two parts: metal/rough maps, then opacity into base colour alpha
+                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? i18n('pr_mr', { d, n }) : i18n('pr_no_mr')), format === 'fbx');
+            })
+            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? i18n('pr_op', { d, n }) : i18n('pr_no_op'))))
+            .then(() => { stage(2); progSub(-1, i18n('pr_building')); return nextPaint(); })
+            .then(() => {
+                const built = _downloadGLBSync(format === 'fbx');
+                if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
+                return exportFBX(built, stage);
+            })
+            .then(() => { _exporting = false; progDone(i18n('pr_done')); })
+            .catch((e) => {
+                _exporting = false;
+                progDone(i18n('pr_export_failed'), true);
+                err('export failed:', e.message, e.stack);
+            });
+    }
+
+    // One line that says which private viewer fields were found. The export reads them
+    // through && chains that give "nothing" when a field is gone, so after a viewer update
+    // this line in a bug report shows what disappeared.
+    function logViewerCapabilities() {
+        try {
+            const all = window.allmodel || [];
+            let rig = 0, pal = 0, matModel = 0, chMap = 0, morph = 0;
+            all.forEach((obj) => {
+                const impl = obj && obj._rigTransformImplementation;
+                if (impl) { rig++; if (impl._skinningAttribute && impl._skinningAttribute._matrixPalette) pal++; }
+                const ch = getMaterialChannels(obj);
+                if (ch) { matModel++; if (ch.__map) chMap++; }
+                try { if (morphTargetCount(obj)) morph++; } catch (e) {}
+            });
+            const mgr = findAnimationManager();
+            let speed = '';
+            if (mgr) { try { speed = `, speed x${typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor}`; } catch (e) {} }
+            log(`viewer: meshes ${all.length}, skinned ${rig} (palette ${pal}/${rig}), morph ${morph}, ` +
+                `material model ${matModel}/${all.length} (channel map ${chMap}/${matModel}), textures seen ${Object.keys(saveimagecache2).length}, ` +
+                `clip manager ${mgr ? `yes (${getClipCount()} clips, ${getClipItems().length} list items${speed})` : 'no'}, ` +
+                `model name label ${document.getElementsByClassName('model-name__label').length ? 'yes' : 'no'}`);
+        } catch (e) { warn('viewer capability check failed:', e.message); }
+    }
+
+    // Lets the panel paint before a long synchronous step. A hidden tab never fires
+    // requestAnimationFrame, so a timer also resolves it (the export must not stall there).
+    function nextPaint() {
+        return new Promise((r) => {
+            let done = false;
+            const go = () => { if (!done) { done = true; setTimeout(r, 0); } };
+            requestAnimationFrame(go);
+            setTimeout(go, 100);
+        });
+    }
+
+    // Zips the model file(s) with the captured textures. extra: { path: Blob }.
+    function packZip(built, files, stage, stageIdx) {
+        stage(stageIdx);
+        const zip = new JSZip();
+        Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
+        for (const tn in built.zipTex) {
+            if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
+                if (built.skipTex && built.skipTex[`textures/${built.zipTex[tn]}`]) continue;
+                zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
+            }
+        }
+        (built.extraTex || []).forEach((t) => zip.file(t.path, t.blob, { compression: 'STORE' }));
+        return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+            (meta) => progSub(meta.percent / 100, `${Math.round(meta.percent)}%`)).then((content) => {
+            saveAs(content, `${built.modelName}.zip`);
+            log('export done:', `${built.modelName}.zip`);
+        }).catch((e) => { throw new Error('zip failed: ' + e.message); });
+    }
+
+    // zlib deflate for compressed FBX arrays (CompressionStream 'deflate' = zlib format)
+    function zlibDeflate(u8) {
+        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
+        const cs = new CompressionStream('deflate');
+        const out = new Response(cs.readable).arrayBuffer().then((b) => new Uint8Array(b));
+        const w = cs.writable.getWriter();
+        // A failure is reported through `out` (FbxWriter then writes the array uncompressed);
+        // catch these two so the browser does not also log "Uncaught (in promise)".
+        w.write(u8).catch(() => {}); w.close().catch(() => {});
+        return out;
+    }
+
+    // One channel of an image as a grayscale PNG (FBX has no packed metal/rough map).
+    function splitChannel(blob, channel) {
+        return createImageBitmap(blob).then((bmp) => {
+            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+            if (bmp.close) bmp.close();   // release the bitmap memory early
+            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data, k = { R: 0, G: 1, B: 2 }[channel];
+            for (let i = 0; i < d.length; i += 4) { const v = d[i + k]; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
+            cx.putImageData(id, 0, 0);
+            return new Promise((res) => c.toBlob((b) => { c.width = 0; res(b); }, 'image/png'));
+        });
+    }
+
+    // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
+    function fbxLabel(label) {
+        const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
+        if (!m) return label;
+        const key = 'fbx_' + m[1].replace(/ /g, '_') + (m[2] ? '_n' : '');
+        return (STRINGS.en[key] !== undefined) ? i18n(key, { i: m[2], n: m[3] }) : label;
+    }
+
+    function exportFBX(built, stage) {
+        stage(3);
+        const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
+        return FbxWriter.gltfToFbx(built.gltf, built.bin, {
+            creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
+            fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
+            deflate: zlibDeflate,
+            onProgress: (f, label) => progSub(f, fbxLabel(label)),
+        }).then((res) => {
+            res.warnings.forEach((w) => warn('fbx: ' + w));
+            const st = res.stats;
+            log(`fbx written: ${(res.fbx.byteLength / 1048576).toFixed(1)} MB, models=${st.models} geometries=${st.geometries} materials=${st.materials} textures=${st.textures} clusters=${st.clusters} clips=${st.stacks} curves=${st.curves}`);
+            stage(4);
+            const byUri = {};
+            for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
+            built.extraTex = [];
+            built.skipTex = {};
+            let n = 0;
+            return res.splits.reduce((p, sp) => p.then(() => {
+                progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
+                const src = byUri[sp.src];
+                if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
+                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
+                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
+            }), Promise.resolve()).then(() => {
+                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
+                return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
+            });
+        });
+    }
+
+    // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
+
+    // ====================================================================
+    // UI panel: progress bars, buttons, settings
+    // ====================================================================
+    // Progress bars: stage (k of n) and sub-stage.
+    let _progHideTimer = null;
+    function progStage(k, n, label) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        clearTimeout(_progHideTimer);
+        box.style.display = 'flex';
+        box.classList.remove('rp-err');
+        document.getElementById('rp-stage-fill').style.width = `${Math.round(100 * k / n)}%`;
+        document.getElementById('rp-stage-label').textContent = `${k}/${n} ${label}`;
+        progSub(0, '');
+    }
+    // frac < 0: work without a measurable fraction (striped bar)
+    function progSub(frac, label) {
+        const fill = document.getElementById('rp-sub-fill');
+        if (!fill) return;
+        const busy = frac < 0;
+        fill.classList.toggle('rp-busy', busy);
+        fill.style.width = busy ? '100%' : `${Math.round(100 * Math.max(0, Math.min(1, frac)))}%`;
+        const l = document.getElementById('rp-sub-label');
+        if (l) l.textContent = label || '';
+    }
+    function progDone(label, isErr) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        box.classList.toggle('rp-err', !!isErr);
+        document.getElementById('rp-stage-fill').style.width = '100%';
+        document.getElementById('rp-stage-label').textContent = label;
+        progSub(1, isErr ? i18n('pr_see_console') : '');
+        clearTimeout(_progHideTimer);
+        _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
+    }
+
+    // Builds the panel again (after a language change), at the same place.
+    let _panelTimers = [];
+    function rebuildPanel(keepOpen) {
+        const old = document.getElementById('ripper-panel');
+        const pos = old ? { left: old.style.left, top: old.style.top, right: old.style.right } : null;
+        _panelTimers.forEach(clearInterval); _panelTimers = [];
+        if (old) old.remove();
+        button_dw = false;
+        addbtnfunc(true, keepOpen, pos);
+    }
+
+    function addbtnfunc(rebuilt, keepOpen, keepPos) {
+        if (button_dw) return;
+        if (!document.body) { setTimeout(addbtnfunc, 500); return; }
+        if (document.getElementById('ripper-panel')) { button_dw = true; return; }
+
+        if (!document.getElementById('ripper-style')) {
+            const css = document.createElement('style');
+            css.id = 'ripper-style';
+            css.textContent = [
+                '#ripper-panel{position:fixed;top:70px;right:16px;z-index:2147483647;width:212px;box-sizing:border-box;background:rgba(24,25,28,.94);',
+                'backdrop-filter:blur(6px);border:1px solid #3a3d42;border-radius:12px;padding:10px;font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;',
+                'color:#e8eaed;display:flex;flex-direction:column;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.55)}',
+                '#ripper-panel .rp-head{display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid #3a3d42}',
+                '#ripper-panel .rp-title{flex:1;font-weight:700;letter-spacing:.06em;font-size:11px;color:#ff9f43;cursor:move;user-select:none}',
+                '#ripper-panel .rp-gear{cursor:pointer;color:#9aa0a6;font-size:15px;line-height:1;padding:2px 4px;border-radius:6px;user-select:none}',
+                '#ripper-panel .rp-gear:hover{background:#2f3236;color:#fff}',
+                '#ripper-panel .rp-sec{font-size:10px;font-weight:600;letter-spacing:.08em;color:#9aa0a6;text-transform:uppercase;margin-top:2px}',
+                '#ripper-panel .rp-row{display:flex;gap:6px}',
+                '#ripper-panel .rp-btn{flex:1;padding:8px 6px;border:0;border-radius:8px;color:#fff;font:600 11px system-ui,sans-serif;letter-spacing:.03em;cursor:pointer;',
+                'transition:background-color .15s,opacity .15s,transform .05s}',
+                '#ripper-panel .rp-btn:active{transform:translateY(1px)}',
+                '#ripper-panel .rp-dl{background:#1a73e8}#ripper-panel .rp-dl:hover{background:#1765cc}',
+                '#ripper-panel .rp-rec{background:#c5221f}#ripper-panel .rp-rec:hover{background:#a50e0e}',
+                '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
+                '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
+                '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
+                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;overflow-wrap:anywhere}',
+                '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
+                '#ripper-progress .rp-bar.rp-thin{height:4px}',
+                '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
+                '#ripper-progress .rp-thin .rp-fill{background:#5f9cf0}',
+                '#ripper-progress .rp-fill.rp-busy{background:repeating-linear-gradient(45deg,#5f9cf0 0 8px,#3c6fc2 8px 16px);background-size:22px 22px;animation:rp-stripe .7s linear infinite}',
+                '@keyframes rp-stripe{to{background-position:22px 0}}',
+                '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
+                '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
+                '#ripper-panel.rp-wide{width:270px}',
+                '#ripper-config>div>span{flex:1;min-width:0}',
+                '#ripper-config select{max-width:55%}',
+                '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
+            ].join('');
+            document.head.appendChild(css);
+        }
+
+        const panel = document.createElement('div');
+        panel.id = 'ripper-panel';
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'rp-head';
+
+        const title = document.createElement('div');
+        title.textContent = 'MODEL RIPPER';   // i18n-ok (name of the script)
+        title.className = 'rp-title';
+        titleRow.appendChild(title);
+
+        const gear = document.createElement('span');
+        gear.textContent = '⚙';
+        gear.title = i18n('settings');
+        gear.className = 'rp-gear';
+        titleRow.appendChild(gear);
+
+        panel.appendChild(titleRow);
+
+        function section(text) {
+            const d = document.createElement('div');
+            d.className = 'rp-sec'; d.textContent = text;
+            panel.appendChild(d);
+        }
+        function button(id, text, cls, onClick) {
+            const b = document.createElement('button');
+            if (id) b.id = id;
+            b.type = 'button';
+            b.className = `rp-btn ${cls}`;
+            b.textContent = text;
+            b.addEventListener('click', onClick);
+            return b;
+        }
+
+        section(i18n('sec_download'));
+        const dlRow = document.createElement('div');
+        dlRow.className = 'rp-row';
+        const btnDL = button('dlGlbBtn', i18n('btn_glb'), 'rp-dl', () => { downloadGLB('glb'); });
+        btnDL.title = i18n('tip_glb');
+        const btnFBX = button('dlFbxBtn', i18n('btn_fbx'), 'rp-dl', () => { downloadGLB('fbx'); });
+        btnFBX.title = i18n('tip_fbx');
+        dlRow.appendChild(btnDL);
+        dlRow.appendChild(btnFBX);
+        panel.appendChild(dlRow);
+
+        section(i18n('sec_animation'));
+        const btnRec = button('recBtnLabel', window.animationRecording ? i18n('btn_stop') : i18n('btn_rec_single'), 'rp-rec', () => {
+            if (!window.animationRecording) startRecording(); else stopRecording();
+        });
+        panel.appendChild(btnRec);
+
+        const btnAll = button('recAllBtn', window.clipRecording ? i18n('btn_cancel') : i18n('btn_rec_all'), 'rp-rec', () => {
+            if (window.clipRecording) {
+                window.clipCancel = true;
+                setRecAllLabel(i18n('btn_cancelling'));
+                log('record-all: cancel requested');
+                return;
+            }
+            recordAllClips();
+        });
+        panel.appendChild(btnAll);
+
+        const progBox = document.createElement('div');
+        progBox.id = 'ripper-progress';
+        progBox.innerHTML = '<div class="rp-lab"><span id="rp-stage-label"></span></div>'
+            + '<div class="rp-bar"><div class="rp-fill" id="rp-stage-fill"></div></div>'
+            + '<div class="rp-bar rp-thin"><div class="rp-fill" id="rp-sub-fill"></div></div>'
+            + '<div class="rp-lab"><span id="rp-sub-label"></span></div>';
+        panel.appendChild(progBox);
+
+        // Buttons that can't do anything right now are greyed out:
+        // RECORD SINGLE CLIP needs 1+ clips, RECORD ALL CLIPS needs 2+, downloads wait for recordings.
+        function setOff(b, off, why) {
+            b.disabled = off;
+            b.title = off ? why : (b.dataset.tip || '');
+        }
+        btnDL.dataset.tip = btnDL.title; btnFBX.dataset.tip = btnFBX.title;
+        function refreshAllBtn() {
+            let n = 0;
+            try { n = getClipCount(); } catch (e) {}
+            const recBusy = window.animationRecording || window.clipRecording;
+            btnRec.classList.toggle('rp-on', !!window.animationRecording);
+            btnAll.classList.toggle('rp-on', !!window.clipRecording);
+            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? i18n('tip_one_clip') : n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            setOff(btnDL, recBusy || _exporting, i18n('tip_busy_dl'));
+            setOff(btnFBX, recBusy || _exporting, i18n('tip_busy_dl'));
+        }
+        refreshAllBtn();
+        _panelTimers.push(setInterval(refreshAllBtn, 500));
+
+        const status = document.createElement('div');
+        status.id = 'ripper-status';
+        status.textContent = i18n('st_idle');
+        panel.appendChild(status);
+
+        // ---- config form (hidden until gear clicked) ----
+        const configDiv = document.createElement('div');
+        configDiv.id = 'ripper-config';
+        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
+
+        const rowL = document.createElement('div');
+        rowL.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const labelL = document.createElement('span');
+        labelL.textContent = i18n('set_language');
+        labelL.title = i18n('set_language_tip');
+        rowL.appendChild(labelL);
+        const selL = document.createElement('select');
+        selL.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])).forEach((o) => {
+            const op = document.createElement('option');
+            op.value = o[0]; op.textContent = o[1];
+            if ((CONFIG.LANGUAGE || 'auto') === o[0]) op.selected = true;
+            selL.appendChild(op);
+        });
+        selL.addEventListener('change', () => {
+            CONFIG.LANGUAGE = selL.value;
+            saveConfig();
+            log(`language set to ${selL.value} (${uiLang()})`);
+            rebuildPanel(true);
+        });
+        rowL.appendChild(selL);
+        configDiv.appendChild(rowL);
+
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label1 = document.createElement('span');
+        label1.textContent = i18n('set_max_seconds');
+        label1.title = i18n('set_max_seconds_tip');
+        row1.appendChild(label1);
+        const input1 = document.createElement('input');
+        input1.type = 'number';
+        input1.min = '1';
+        input1.max = '60';
+        input1.value = CONFIG.MAX_RECORD_SECONDS;
+        input1.style.cssText = 'width:52px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        input1.addEventListener('change', () => {
+            let v = parseInt(input1.value, 10);
+            if (isNaN(v) || v < 1) v = 1;
+            if (v > 60) v = 60;
+            input1.value = v;
+            CONFIG.MAX_RECORD_SECONDS = v;
+            saveConfig();
+            log(`max record seconds set to ${v}`);
+        });
+        row1.appendChild(input1);
+        configDiv.appendChild(row1);
+
+        const rowF = document.createElement('div');
+        rowF.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const labelF = document.createElement('span');
+        labelF.textContent = i18n('set_fps');
+        labelF.title = i18n('set_fps_tip');
+        rowF.appendChild(labelF);
+        const selF = document.createElement('select');
+        selF.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
+            const op = document.createElement('option');
+            op.value = String(o[0]); op.textContent = o[1];
+            if ((+CONFIG.RECORD_FPS || 0) === o[0]) op.selected = true;
+            selF.appendChild(op);
+        });
+        selF.addEventListener('change', () => {
+            CONFIG.RECORD_FPS = parseInt(selF.value, 10) || 0;
+            saveConfig();
+            log(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
+        });
+        rowF.appendChild(selF);
+        configDiv.appendChild(rowF);
+
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label2 = document.createElement('span');
+        label2.textContent = i18n('set_reload');
+        label2.title = i18n('set_reload_tip');
+        row2.appendChild(label2);
+        const check2 = document.createElement('input');
+        check2.type = 'checkbox';
+        check2.checked = CONFIG.AUTO_RELOAD_ON_FAILURE;
+        check2.addEventListener('change', () => {
+            CONFIG.AUTO_RELOAD_ON_FAILURE = check2.checked;
+            saveConfig();
+            log(`auto-reload on failure set to ${check2.checked}`);
+        });
+        row2.appendChild(check2);
+        configDiv.appendChild(row2);
+
+        const row5 = document.createElement('div');
+        row5.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label5 = document.createElement('span');
+        label5.textContent = i18n('set_double');
+        label5.title = i18n('set_double_tip');
+        row5.appendChild(label5);
+        const check5 = document.createElement('input');
+        check5.type = 'checkbox';
+        check5.checked = !!CONFIG.DOUBLE_SIDED;
+        check5.addEventListener('change', () => {
+            CONFIG.DOUBLE_SIDED = check5.checked;
+            saveConfig();
+            log(`double sided set to ${check5.checked}`);
+        });
+        row5.appendChild(check5);
+        configDiv.appendChild(row5);
+
+        const row5b = document.createElement('div');
+        row5b.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label5b = document.createElement('span');
+        label5b.textContent = i18n('set_single_auto');
+        label5b.title = i18n('set_single_auto_tip');
+        row5b.appendChild(label5b);
+        const check5b = document.createElement('input');
+        check5b.type = 'checkbox';
+        check5b.checked = !!CONFIG.DOUBLE_SIDED_AUTO;
+        check5b.addEventListener('change', () => {
+            CONFIG.DOUBLE_SIDED_AUTO = check5b.checked;
+            saveConfig();
+            log(`auto single sided set to ${check5b.checked}`);
+        });
+        row5b.appendChild(check5b);
+        configDiv.appendChild(row5b);
+
+        const row5c = document.createElement('div');
+        row5c.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label5c = document.createElement('span');
+        label5c.textContent = i18n('set_slivers');
+        label5c.title = i18n('set_slivers_tip');
+        row5c.appendChild(label5c);
+        const check5c = document.createElement('input');
+        check5c.type = 'checkbox';
+        check5c.checked = !!CONFIG.DROP_STRIP_SLIVERS;
+        check5c.addEventListener('change', () => {
+            CONFIG.DROP_STRIP_SLIVERS = check5c.checked;
+            saveConfig();
+            log(`drop strip slivers set to ${check5c.checked}`);
+        });
+        row5c.appendChild(check5c);
+        configDiv.appendChild(row5c);
+
+        const row5d = document.createElement('div');
+        row5d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label5d = document.createElement('span');
+        label5d.textContent = i18n('set_reduce');
+        label5d.title = i18n('set_reduce_tip');
+        row5d.appendChild(label5d);
+        const check5d = document.createElement('input');
+        check5d.type = 'checkbox';
+        check5d.checked = !!CONFIG.REDUCE_KEYS;
+        check5d.addEventListener('change', () => {
+            CONFIG.REDUCE_KEYS = check5d.checked;
+            saveConfig();
+            log(`reduce keyframes set to ${check5d.checked}`);
+        });
+        row5d.appendChild(check5d);
+        configDiv.appendChild(row5d);
+
+        const row5e = document.createElement('div');
+        row5e.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label5e = document.createElement('span');
+        label5e.textContent = i18n('set_still');
+        label5e.title = i18n('set_still_tip');
+        row5e.appendChild(label5e);
+        const check5e = document.createElement('input');
+        check5e.type = 'checkbox';
+        check5e.checked = !!CONFIG.KEEP_STILL_CLIPS;
+        check5e.addEventListener('change', () => {
+            CONFIG.KEEP_STILL_CLIPS = check5e.checked;
+            saveConfig();
+            log(`keep still clips set to ${check5e.checked}`);
+        });
+        row5e.appendChild(check5e);
+        configDiv.appendChild(row5e);
+
+        const row6 = document.createElement('div');
+        row6.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label6 = document.createElement('span');
+        label6.textContent = i18n('set_vcolor');
+        label6.title = i18n('set_vcolor_tip');
+        row6.appendChild(label6);
+        const check6 = document.createElement('input');
+        check6.type = 'checkbox';
+        check6.checked = !!CONFIG.VERTEX_COLOR_SRGB;
+        check6.addEventListener('change', () => {
+            CONFIG.VERTEX_COLOR_SRGB = check6.checked;
+            saveConfig();
+            log(`vertex color sRGB->linear set to ${check6.checked}`);
+        });
+        row6.appendChild(check6);
+        configDiv.appendChild(row6);
+
+        const row7 = document.createElement('div');
+        row7.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label7 = document.createElement('span');
+        label7.textContent = i18n('set_flat_mr');
+        label7.title = i18n('set_flat_mr_tip');
+        row7.appendChild(label7);
+        const check7 = document.createElement('input');
+        check7.type = 'checkbox';
+        check7.checked = !!CONFIG.FLAT_MR_FROM_VIEWER;
+        check7.addEventListener('change', () => {
+            CONFIG.FLAT_MR_FROM_VIEWER = check7.checked;
+            saveConfig();
+            log(`flat metal/rough from viewer set to ${check7.checked}`);
+        });
+        row7.appendChild(check7);
+        configDiv.appendChild(row7);
+
+        const row8 = document.createElement('div');
+        row8.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label8 = document.createElement('span');
+        label8.textContent = i18n('set_scale');
+        label8.title = i18n('set_scale_tip');
+        row8.appendChild(label8);
+        const input8 = document.createElement('input');
+        // text, not type=number: a number field rejects "0,01" in some browsers and languages
+        input8.type = 'text';
+        input8.inputMode = 'decimal';
+        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
+        const showNum = (v) => String(v).replace('.', decSep);
+        input8.value = showNum(CONFIG.EXPORT_SCALE);
+        input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        input8.addEventListener('change', () => {
+            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
+            if (isNaN(v) || v <= 0) v = 1;
+            input8.value = showNum(v);
+            CONFIG.EXPORT_SCALE = v;
+            saveConfig();
+            log(`export scale set to ${v}`);
+        });
+        row8.appendChild(input8);
+        configDiv.appendChild(row8);
+
+        const row3 = document.createElement('div');
+        row3.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label3 = document.createElement('span');
+        label3.textContent = i18n('set_mr_format');
+        label3.title = i18n('set_mr_format_tip');
+        row3.appendChild(label3);
+        const sel3 = document.createElement('select');
+        sel3.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]].forEach((opt) => {
+            const o = document.createElement('option');
+            o.value = opt[0];
+            o.textContent = opt[1];
+            if (CONFIG.MR_TEXTURE_FORMAT === opt[0]) o.selected = true;
+            sel3.appendChild(o);
+        });
+        sel3.addEventListener('change', () => {
+            CONFIG.MR_TEXTURE_FORMAT = sel3.value;
+            saveConfig();
+            log(`metal/rough texture format set to ${sel3.value}`);
+        });
+        row3.appendChild(sel3);
+        configDiv.appendChild(row3);
+
+        const row4 = document.createElement('div');
+        row4.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+        const label4 = document.createElement('span');
+        label4.textContent = i18n('set_rest');
+        label4.title = i18n('set_rest_tip');
+        row4.appendChild(label4);
+        const sel4 = document.createElement('select');
+        sel4.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
+        [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]].forEach((opt) => {
+            const o = document.createElement('option');
+            o.value = opt[0];
+            o.textContent = opt[1];
+            if (CONFIG.REST_POSE_SOURCE === opt[0]) o.selected = true;
+            sel4.appendChild(o);
+        });
+        sel4.addEventListener('change', () => {
+            CONFIG.REST_POSE_SOURCE = sel4.value;
+            saveConfig();
+            log(`rest pose source set to ${sel4.value}`);
+        });
+        row4.appendChild(sel4);
+        configDiv.appendChild(row4);
+
+        panel.appendChild(configDiv);
+
+        // The settings need more room (longer labels in some languages): the panel gets wider while they are open.
+        gear.addEventListener('click', () => {
+            const open = configDiv.style.display === 'none';
+            configDiv.style.display = open ? 'flex' : 'none';
+            panel.classList.toggle('rp-wide', open);
+        });
+        if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
+        if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
+
+        document.body.appendChild(panel);
+        makeDraggable(panel, title);
+        button_dw = true;
+        log(`panel added (language ${uiLang()})`);
+        if (rebuilt) return;   // the checks below run once per page
+
+        // Warn if the bad bundle was served. After 8s, show hint. After
+        // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
+        setTimeout(() => {
+            if (window._anyAnchorsMatched) return;
+            const s = document.getElementById('ripper-status');
+            if (s) {
+                s.textContent = i18n('st_no_anchors');
+                s.style.color = '#f80';
+            }
+            log('no anchors matched after 8s; bundle is the incompatible build');
+        }, 8000);
+
+        setTimeout(() => {
+            reportMissingPatches();   // anchors matched, but maybe not all five patches
+            if (window._anyAnchorsMatched) return;
+            let already;
+            try { already = sessionStorage.getItem('ripper_reloaded'); } catch (e) { already = '1'; }
+            if (already) return;
+            if (!CONFIG.AUTO_RELOAD_ON_FAILURE) return;
+            try { sessionStorage.setItem('ripper_reloaded', '1'); if (sessionStorage.getItem('ripper_reloaded') !== '1') return; } catch (e) { return; }
+            log('no anchors after 12s, auto-reloading once');
+            location.reload();
+        }, 12000);
+
+        setInterval(() => {
+            const s = document.getElementById('ripper-status');
+            if (!s) return;
+            if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
+            const busy = window.animationRecording || window.clipRecording;
+            const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
+            s.textContent = i18n('st_line', { state, m: window.allmodel.length, f: window.recordedFrames.length, c: getClipCount() })
+                          + (window.clips.length ? i18n('st_rec_clips', { n: window.clips.length }) : '');
+            s.style.color = busy ? '#f28b82' : '#9aa0a6';
+        }, 500);
+
+        // Document listeners are added once; they move whichever panel is current.
+        document.addEventListener('mousemove', (e) => {
+            const d = _panelDrag;
+            if (!d) return;
+            d.el.style.left = `${e.clientX - d.ox}px`;
+            d.el.style.top  = `${e.clientY - d.oy}px`;
+            d.el.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { _panelDrag = null; });
+    }
+
+    // Drag state of the panel title. The mousedown handler is set on every
+    // build (also after a language change), so a rebuilt panel can be moved too.
+    let _panelDrag = null;   // { el, ox, oy } while the title is held
+    function makeDraggable(el, handle) {
+        handle.addEventListener('mousedown', (e) => {
+            _panelDrag = { el, ox: e.clientX - el.offsetLeft, oy: e.clientY - el.offsetTop };
+            e.preventDefault();
+        });
     }
 
     // ====================================================================
