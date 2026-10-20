@@ -4306,6 +4306,49 @@
         _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
     }
 
+    // ---- settings form: one row = label (tooltip from <key>_tip) + control ----
+    function settingRow(parent, labelKey, control) {
+        const row = document.createElement('div');
+        row.className = 'rp-set';
+        const label = document.createElement('span');
+        label.textContent = i18n(labelKey);
+        label.title = i18n(`${labelKey}_tip`);
+        row.appendChild(label);
+        row.appendChild(control);
+        parent.appendChild(row);
+        return control;
+    }
+    // A text or number field in the settings (styled by .rp-field).
+    function settingField(el, width) {
+        el.className = 'rp-field';
+        if (width) el.style.width = width;
+        return el;
+    }
+    // A checkbox bound to CONFIG[cfgKey]: saved and logged on change.
+    function checkSetting(parent, cfgKey, labelKey, logName) {
+        const c = document.createElement('input');
+        c.type = 'checkbox';
+        c.checked = !!CONFIG[cfgKey];
+        c.addEventListener('change', () => {
+            CONFIG[cfgKey] = c.checked;
+            saveConfig();
+            log(`${logName} set to ${c.checked}`);
+        });
+        return settingRow(parent, labelKey, c);
+    }
+    // A select with options [[value, text], ...]; current is the selected value. onChange(value as string).
+    function selectSetting(parent, labelKey, options, current, onChange) {
+        const sel = document.createElement('select');
+        options.forEach((o) => {
+            const op = document.createElement('option');
+            op.value = String(o[0]); op.textContent = o[1];
+            if (current === o[0]) op.selected = true;
+            sel.appendChild(op);
+        });
+        sel.addEventListener('change', () => onChange(sel.value));
+        return settingRow(parent, labelKey, sel);
+    }
+
     // Builds the panel again (after a language change), at the same place.
     let _panelTimers = [];
     function rebuildPanel(keepOpen) {
@@ -4355,7 +4398,9 @@
                 '#ripper-panel.rp-wide{width:270px}',
                 '#ripper-config>div>span{flex:1;min-width:0}',
                 '#ripper-config select{max-width:55%}',
-                '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
+                '#ripper-config .rp-set{display:flex;justify-content:space-between;align-items:center;gap:6px}',
+                '#ripper-config input[type=checkbox]{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
+                '#ripper-config select,#ripper-config .rp-field{background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font:11px monospace}',
             ].join('');
             document.head.appendChild(css);
         }
@@ -4461,281 +4506,67 @@
         configDiv.id = 'ripper-config';
         configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
 
-        const rowL = document.createElement('div');
-        rowL.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelL = document.createElement('span');
-        labelL.textContent = i18n('set_language');
-        labelL.title = i18n('set_language_tip');
-        rowL.appendChild(labelL);
-        const selL = document.createElement('select');
-        selL.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])).forEach((o) => {
-            const op = document.createElement('option');
-            op.value = o[0]; op.textContent = o[1];
-            if ((CONFIG.LANGUAGE || 'auto') === o[0]) op.selected = true;
-            selL.appendChild(op);
-        });
-        selL.addEventListener('change', () => {
-            CONFIG.LANGUAGE = selL.value;
-            saveConfig();
-            log(`language set to ${selL.value} (${uiLang()})`);
-            rebuildPanel(true);
-        });
-        rowL.appendChild(selL);
-        configDiv.appendChild(rowL);
+        const cfgSaved = (msg) => { saveConfig(); log(msg); };
+        selectSetting(configDiv, 'set_language',
+            [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])), CONFIG.LANGUAGE || 'auto', (v) => {
+                CONFIG.LANGUAGE = v;
+                cfgSaved(`language set to ${v} (${uiLang()})`);
+                rebuildPanel(true);
+            });
 
-        const row1 = document.createElement('div');
-        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label1 = document.createElement('span');
-        label1.textContent = i18n('set_max_seconds');
-        label1.title = i18n('set_max_seconds_tip');
-        row1.appendChild(label1);
-        const input1 = document.createElement('input');
+        const input1 = settingField(document.createElement('input'), '52px');
         input1.type = 'number';
         input1.min = '1';
         input1.max = '60';
         input1.value = CONFIG.MAX_RECORD_SECONDS;
-        input1.style.cssText = 'width:52px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
         input1.addEventListener('change', () => {
             let v = parseInt(input1.value, 10);
             if (isNaN(v) || v < 1) v = 1;
             if (v > 60) v = 60;
             input1.value = v;
             CONFIG.MAX_RECORD_SECONDS = v;
-            saveConfig();
-            log(`max record seconds set to ${v}`);
+            cfgSaved(`max record seconds set to ${v}`);
         });
-        row1.appendChild(input1);
-        configDiv.appendChild(row1);
+        settingRow(configDiv, 'set_max_seconds', input1);
 
-        const rowF = document.createElement('div');
-        rowF.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelF = document.createElement('span');
-        labelF.textContent = i18n('set_fps');
-        labelF.title = i18n('set_fps_tip');
-        rowF.appendChild(labelF);
-        const selF = document.createElement('select');
-        selF.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
-            const op = document.createElement('option');
-            op.value = String(o[0]); op.textContent = o[1];
-            if ((+CONFIG.RECORD_FPS || 0) === o[0]) op.selected = true;
-            selF.appendChild(op);
+        selectSetting(configDiv, 'set_fps', [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']], +CONFIG.RECORD_FPS || 0, (v) => {
+            CONFIG.RECORD_FPS = parseInt(v, 10) || 0;
+            cfgSaved(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
         });
-        selF.addEventListener('change', () => {
-            CONFIG.RECORD_FPS = parseInt(selF.value, 10) || 0;
-            saveConfig();
-            log(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
-        });
-        rowF.appendChild(selF);
-        configDiv.appendChild(rowF);
 
-        const row2 = document.createElement('div');
-        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label2 = document.createElement('span');
-        label2.textContent = i18n('set_reload');
-        label2.title = i18n('set_reload_tip');
-        row2.appendChild(label2);
-        const check2 = document.createElement('input');
-        check2.type = 'checkbox';
-        check2.checked = CONFIG.AUTO_RELOAD_ON_FAILURE;
-        check2.addEventListener('change', () => {
-            CONFIG.AUTO_RELOAD_ON_FAILURE = check2.checked;
-            saveConfig();
-            log(`auto-reload on failure set to ${check2.checked}`);
-        });
-        row2.appendChild(check2);
-        configDiv.appendChild(row2);
+        checkSetting(configDiv, 'AUTO_RELOAD_ON_FAILURE', 'set_reload', 'auto-reload on failure');
+        checkSetting(configDiv, 'DOUBLE_SIDED', 'set_double', 'double sided');
+        checkSetting(configDiv, 'DOUBLE_SIDED_AUTO', 'set_single_auto', 'auto single sided');
+        checkSetting(configDiv, 'DROP_STRIP_SLIVERS', 'set_slivers', 'drop strip slivers');
+        checkSetting(configDiv, 'REDUCE_KEYS', 'set_reduce', 'reduce keyframes');
+        checkSetting(configDiv, 'KEEP_STILL_CLIPS', 'set_still', 'keep still clips');
+        checkSetting(configDiv, 'VERTEX_COLOR_SRGB', 'set_vcolor', 'vertex color sRGB->linear');
+        checkSetting(configDiv, 'FLAT_MR_FROM_VIEWER', 'set_flat_mr', 'flat metal/rough from viewer');
 
-        const row5 = document.createElement('div');
-        row5.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5 = document.createElement('span');
-        label5.textContent = i18n('set_double');
-        label5.title = i18n('set_double_tip');
-        row5.appendChild(label5);
-        const check5 = document.createElement('input');
-        check5.type = 'checkbox';
-        check5.checked = !!CONFIG.DOUBLE_SIDED;
-        check5.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED = check5.checked;
-            saveConfig();
-            log(`double sided set to ${check5.checked}`);
-        });
-        row5.appendChild(check5);
-        configDiv.appendChild(row5);
-
-        const row5b = document.createElement('div');
-        row5b.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5b = document.createElement('span');
-        label5b.textContent = i18n('set_single_auto');
-        label5b.title = i18n('set_single_auto_tip');
-        row5b.appendChild(label5b);
-        const check5b = document.createElement('input');
-        check5b.type = 'checkbox';
-        check5b.checked = !!CONFIG.DOUBLE_SIDED_AUTO;
-        check5b.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED_AUTO = check5b.checked;
-            saveConfig();
-            log(`auto single sided set to ${check5b.checked}`);
-        });
-        row5b.appendChild(check5b);
-        configDiv.appendChild(row5b);
-
-        const row5c = document.createElement('div');
-        row5c.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5c = document.createElement('span');
-        label5c.textContent = i18n('set_slivers');
-        label5c.title = i18n('set_slivers_tip');
-        row5c.appendChild(label5c);
-        const check5c = document.createElement('input');
-        check5c.type = 'checkbox';
-        check5c.checked = !!CONFIG.DROP_STRIP_SLIVERS;
-        check5c.addEventListener('change', () => {
-            CONFIG.DROP_STRIP_SLIVERS = check5c.checked;
-            saveConfig();
-            log(`drop strip slivers set to ${check5c.checked}`);
-        });
-        row5c.appendChild(check5c);
-        configDiv.appendChild(row5c);
-
-        const row5d = document.createElement('div');
-        row5d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5d = document.createElement('span');
-        label5d.textContent = i18n('set_reduce');
-        label5d.title = i18n('set_reduce_tip');
-        row5d.appendChild(label5d);
-        const check5d = document.createElement('input');
-        check5d.type = 'checkbox';
-        check5d.checked = !!CONFIG.REDUCE_KEYS;
-        check5d.addEventListener('change', () => {
-            CONFIG.REDUCE_KEYS = check5d.checked;
-            saveConfig();
-            log(`reduce keyframes set to ${check5d.checked}`);
-        });
-        row5d.appendChild(check5d);
-        configDiv.appendChild(row5d);
-
-        const row5e = document.createElement('div');
-        row5e.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5e = document.createElement('span');
-        label5e.textContent = i18n('set_still');
-        label5e.title = i18n('set_still_tip');
-        row5e.appendChild(label5e);
-        const check5e = document.createElement('input');
-        check5e.type = 'checkbox';
-        check5e.checked = !!CONFIG.KEEP_STILL_CLIPS;
-        check5e.addEventListener('change', () => {
-            CONFIG.KEEP_STILL_CLIPS = check5e.checked;
-            saveConfig();
-            log(`keep still clips set to ${check5e.checked}`);
-        });
-        row5e.appendChild(check5e);
-        configDiv.appendChild(row5e);
-
-        const row6 = document.createElement('div');
-        row6.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label6 = document.createElement('span');
-        label6.textContent = i18n('set_vcolor');
-        label6.title = i18n('set_vcolor_tip');
-        row6.appendChild(label6);
-        const check6 = document.createElement('input');
-        check6.type = 'checkbox';
-        check6.checked = !!CONFIG.VERTEX_COLOR_SRGB;
-        check6.addEventListener('change', () => {
-            CONFIG.VERTEX_COLOR_SRGB = check6.checked;
-            saveConfig();
-            log(`vertex color sRGB->linear set to ${check6.checked}`);
-        });
-        row6.appendChild(check6);
-        configDiv.appendChild(row6);
-
-        const row7 = document.createElement('div');
-        row7.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label7 = document.createElement('span');
-        label7.textContent = i18n('set_flat_mr');
-        label7.title = i18n('set_flat_mr_tip');
-        row7.appendChild(label7);
-        const check7 = document.createElement('input');
-        check7.type = 'checkbox';
-        check7.checked = !!CONFIG.FLAT_MR_FROM_VIEWER;
-        check7.addEventListener('change', () => {
-            CONFIG.FLAT_MR_FROM_VIEWER = check7.checked;
-            saveConfig();
-            log(`flat metal/rough from viewer set to ${check7.checked}`);
-        });
-        row7.appendChild(check7);
-        configDiv.appendChild(row7);
-
-        const row8 = document.createElement('div');
-        row8.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label8 = document.createElement('span');
-        label8.textContent = i18n('set_scale');
-        label8.title = i18n('set_scale_tip');
-        row8.appendChild(label8);
-        const input8 = document.createElement('input');
         // text, not type=number: a number field rejects "0,01" in some browsers and languages
+        const input8 = settingField(document.createElement('input'), '64px');
         input8.type = 'text';
         input8.inputMode = 'decimal';
         const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
         const showNum = (v) => String(v).replace('.', decSep);
         input8.value = showNum(CONFIG.EXPORT_SCALE);
-        input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
         input8.addEventListener('change', () => {
             let v = parseFloat(String(input8.value).trim().replace(',', '.'));
             if (isNaN(v) || v <= 0) v = 1;
             input8.value = showNum(v);
             CONFIG.EXPORT_SCALE = v;
-            saveConfig();
-            log(`export scale set to ${v}`);
+            cfgSaved(`export scale set to ${v}`);
         });
-        row8.appendChild(input8);
-        configDiv.appendChild(row8);
+        settingRow(configDiv, 'set_scale', input8);
 
-        const row3 = document.createElement('div');
-        row3.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label3 = document.createElement('span');
-        label3.textContent = i18n('set_mr_format');
-        label3.title = i18n('set_mr_format_tip');
-        row3.appendChild(label3);
-        const sel3 = document.createElement('select');
-        sel3.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.MR_TEXTURE_FORMAT === opt[0]) o.selected = true;
-            sel3.appendChild(o);
+        selectSetting(configDiv, 'set_mr_format', [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]], CONFIG.MR_TEXTURE_FORMAT, (v) => {
+            CONFIG.MR_TEXTURE_FORMAT = v;
+            cfgSaved(`metal/rough texture format set to ${v}`);
         });
-        sel3.addEventListener('change', () => {
-            CONFIG.MR_TEXTURE_FORMAT = sel3.value;
-            saveConfig();
-            log(`metal/rough texture format set to ${sel3.value}`);
+        selectSetting(configDiv, 'set_rest', [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]], CONFIG.REST_POSE_SOURCE, (v) => {
+            CONFIG.REST_POSE_SOURCE = v;
+            cfgSaved(`rest pose source set to ${v}`);
         });
-        row3.appendChild(sel3);
-        configDiv.appendChild(row3);
-
-        const row4 = document.createElement('div');
-        row4.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label4 = document.createElement('span');
-        label4.textContent = i18n('set_rest');
-        label4.title = i18n('set_rest_tip');
-        row4.appendChild(label4);
-        const sel4 = document.createElement('select');
-        sel4.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.REST_POSE_SOURCE === opt[0]) o.selected = true;
-            sel4.appendChild(o);
-        });
-        sel4.addEventListener('change', () => {
-            CONFIG.REST_POSE_SOURCE = sel4.value;
-            saveConfig();
-            log(`rest pose source set to ${sel4.value}`);
-        });
-        row4.appendChild(sel4);
-        configDiv.appendChild(row4);
 
         panel.appendChild(configDiv);
 

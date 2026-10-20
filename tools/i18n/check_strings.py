@@ -87,7 +87,8 @@ def check(strings, plural, code):
         if k not in en:
             errors.append(f'code: i18n key {k} is not in English')
     for k in en:
-        if k not in used and k not in literal and not k.startswith(DYNAMIC_PREFIX):
+        tip_of_setting = k.endswith('_tip') and k[:-4] in literal   # settingRow() reads i18n(`${labelKey}_tip`)
+        if k not in used and k not in literal and not k.startswith(DYNAMIC_PREFIX) and not tip_of_setting:
             warns.append(f'en: key {k} is not used in the code')
     pats = [
         (r"\.(?:textContent|title)\s*=\s*(['`])([^'`]*)\1", 'text set directly'),
