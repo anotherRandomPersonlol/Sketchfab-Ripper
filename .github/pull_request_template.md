@@ -23,5 +23,5 @@
 - [ ] `python3 tools/i18n/check_strings.py` shows 0 errors (for changes to the panel or the translations).
 - [ ] New UI text goes through `i18n()` and is in the `STRINGS` table in English.
 - [ ] Each important action writes one `log()`, `warn()` or `err()` line.
-- [ ] `@version` and `CHANGELOG.md` are updated (see CONTRIBUTING.md).
+- [ ] `CHANGELOG.md` has a line under `## Unreleased`. `@version` is not changed (the maintainer sets it at release).
 - [ ] The description has no closing keyword such as "fixes #12". The maintainer closes issues after testing.

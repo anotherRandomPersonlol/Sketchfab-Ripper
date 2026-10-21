@@ -49,7 +49,8 @@ Do not attach exported files, textures or screenshots of models that you do not 
 - Put new parts of the script between `// ====` section lines, as the other parts are.
 - The sections of `src/Sketchfab-ripper.user.js`, in order: settings, logging, UI text (translations), math, sheared joint matrices, viewer access (node matrices, materials, morph targets, the rig, the animation manager), capture hooks (textures, meshes), recorder, texture merges and readiness, glTF builder, export (GLB and FBX downloads), UI panel, FBX writer, script interceptor. Keep the FBX writer directly above the script interceptor: `tools/fbx/glb2fbx.js` cuts the writer out of the file between those two section lines.
 - Run `node --check src/Sketchfab-ripper.user.js` before you commit.
-- Increase `@version` in the script header and add a line to [`CHANGELOG.md`](CHANGELOG.md).
+- Do not change `@version` in the script header. The maintainer sets it at release: a new `@version` on `main` publishes a release at once.
+- Add a line to [`CHANGELOG.md`](CHANGELOG.md) under `## Unreleased` at the top. Add that heading if it is not there.
 - Put research notes and test results in [`docs/NOTES.md`](docs/NOTES.md).
 
 ### Fix or add a translation
