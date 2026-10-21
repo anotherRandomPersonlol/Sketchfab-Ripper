@@ -8,6 +8,7 @@
 - A cancelled RECORD ALL CLIPS now shows "Recording cancelled". When the clip list cannot be read, it shows "Recording failed" instead of "Recorded 0 clips".
 - Clip recording follows the viewer's playback speed (x0.1, x0.5, x2). Before, at x0.5 or x0.1 the recording ended too early. The exported clip always plays at normal speed, so a slow speed gives more frames per second of animation (with Record FPS set to Max).
 - An export started in a background tab no longer stops at "Building scene" until you open the tab again.
+- Untextured materials that use the viewer's Diffuse colour (specular/gloss workflow) keep their colour. Before, they were exported white (for example the lamps, cables and papers of the Abandoned Warehouse).
 - If one metal, roughness or gloss image cannot be decoded, the other maps of that material are still merged.
 - With **Vertex color sRGB>linear** off, FBX vertex colours are no longer converted to sRGB a second time (they were too bright). The GLB marks such colours with `asset.extras.vertexColorSpace: "srgb"`.
 

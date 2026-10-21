@@ -3162,7 +3162,9 @@
             if (cmap) for (let mpk in cmap) if (cmap.hasOwnProperty(mpk) && cmap[mpk] >= 0) mapKeys.push(`${mpk}=${cmap[mpk]}`);
             log('material ' + m.name + ': texture channels [' + chKeys.join(',') + '] mapping [' + mapKeys.join(',') + ']' +
                 (pbr.baseColorTexture ? ' baseColorTexture set' : ' no baseColorTexture'));
-            const alb = flat.AlbedoPBR;
+            // Base colour: AlbedoPBR (metal/rough workflow) or DiffusePBR / DiffuseColor (specular/gloss and
+            // classic workflows), whichever channel is switched on.
+            const alb = [flat.AlbedoPBR, flat.DiffusePBR, flat.DiffuseColor].find((c) => c && c.enable) || flat.AlbedoPBR;
             const alphaOnlyTex = !!_opacityNoColor[sanitizeTextureName(m.name)];
             if (alb && alb.enable && (alb.color || typeof alb.factor === 'number') && (!pbr.baseColorTexture || alphaOnlyTex) && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
                 // No colour value means white scaled by the factor (factor 0 = black base, colour from emission only).

@@ -18,3 +18,5 @@ Requirements: Node.js, Python 3 with numpy and Pillow, and the Blender Python mo
    `python3 tools/fbx/bl_mats.py -- model.glb model.fbx`
 
 `gltfref.py` computes the reference: the world position of every vertex at a time in a clip, from the GLB alone (node animation, skinning, morph targets). The errors are relative to the size of the scene. Expect about 1e-5 or less.
+
+The rest pose line of `bl_compare.py` is only meaningful when the rest pose is the first frame of the first clip. Blender keeps the pose of the last evaluated action after the action is removed, so with **Rest pose: Static Pose** the rest error is large while every clip matches. Check the joint defaults with ufbx instead (`node.local_transform` against the glTF node TRS).
