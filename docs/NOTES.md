@@ -123,7 +123,10 @@ node). Useful members:
   every 15-20 frames. Record in real time instead.
 - Frame times come from `getSimulationTime()` (wall-clock fallback).
 - `getSimulationTime()` runs at wall speed; the playback speed (x0.1 to x2) is `getTimeFactor()` / `_timeFactor`
-  (probe 2026-10-20: ratio 1.0 at x0.5 with `_timeFactor` 0.5). Clip time = sum of clock deltas x speed, read every frame.
+  (probe 2026-10-20: ratio 1.0 at x0.5 with `_timeFactor` 0.5). A speed change rescales the clock so that
+  `getSimulationTime() * getTimeFactor()` stays continuous (probe 2026-10-21, `tools/probe-speed-change.js`: x1 -> x2
+  turns 15.65 into 7.85, x0.5 -> x0.1 turns 37.07 into 185.85). That product is the clip time; the recorder adds its
+  increase per frame. (The first version added raw clock deltas x speed and took the rescale jumps as clip time.)
   The recorder stops as "clock stalled" only when that clip time does not move for 3 s of wall time.
   The viewer defaults to "Play all" and can switch clips at the end of
   one, so samples at or past `duration` are dropped. The loop is closed
@@ -512,7 +515,8 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
 
 - Two independent reviews (a fresh Claude with no history, and Gemini) gave the findings R1-R21 and G1-G3. Each finding was checked against the code before a change; documented workarounds were kept.
 - Bugs fixed: a RECORD ALL that kept one clip exported no animation (export used `window.clips` only when it held 2 or more); the panel could not be dragged after a language change; a cancelled RECORD ALL showed success (the flag was cleared before it was read); an export in a hidden tab stopped at `nextPaint` (rAF does not fire); FBX vertex colours were sRGB-encoded twice with "Vertex color sRGB>linear" off (the GLB now says `asset.extras.vertexColorSpace: "srgb"`).
-- Playback speed: `getSimulationTime()` runs at wall speed and the x0.1-x2 setting is only in `getTimeFactor()` / `_timeFactor` (probe `tools/probe-playback-speed.js`). Clip time = sum of clock deltas x speed; the stall stop needs 3 s without clip-time progress.
+- Playback speed: `getSimulationTime()` runs at wall speed, the x0.1-x2 setting is `getTimeFactor()`, and a speed change rescales the clock; clip time = simulation time x speed (probes `tools/probe-playback-speed.js`, `tools/probe-speed-change.js`). The stall stop needs 3 s without clip-time progress.
+- Untextured specular/gloss materials: the flat colour is in `DiffusePBR` (or `DiffuseColor`), not only `AlbedoPBR` (warehouse lamps were white).
 - Diagnostics: missing viewer patches are listed 12 s after load (`all viewer patches applied` otherwise); a sentinel appended to the patched bundle reports when it did not run (CSP, throw); export start logs one `viewer: ...` line of the private fields found.
 - Structure: sections reordered (code moved, not changed; see CONTRIBUTING), `_downloadGLBSync` split into helpers (primitiveTriangles, vertexColorAccessor, morphTargetAccessors, buildTexturePool, finishMaterials, collectClipSets, pruneUnusedTextures, packGlb), settings rows built by `settingRow`/`checkSetting`/`selectSetting` with one stylesheet.
 - Test method for the refactor: a mock osgjs scene (skinned mesh with a readable rig, skinned mesh without a bone list and with shear and a show/hide-by-scale joint, strip with restart index and a bridging sliver, wireframe overlay, morph targets, MR and opacity merges, flat materials, two clips and a Static Pose snapshot) goes through the real hooks and the export. GLB and FBX outputs and the log lines were byte-identical before and after every refactor step, in four setting combinations. The settings form was compared pixel by pixel in three languages.

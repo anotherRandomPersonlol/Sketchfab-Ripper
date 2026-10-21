@@ -2008,37 +2008,37 @@
     function recordClipRealtime(mgr, def, base, cb) {
         mgr.setSeekTime(base);
         if (mgr._pause) mgr.togglePause();
-        // Frame times are clip time: the manager's clock (getSimulationTime, which runs
-        // at wall speed) times the viewer's playback speed (getTimeFactor: x0.1, x0.5,
-        // x1, x2). The speed is read every frame, so a change while recording is
-        // followed. Slow playback gives more samples; the clip still exports at x1.
-        // Falls back to wall-clock time if the manager clock is unavailable.
+        // Frame times are clip time. The manager's clock getSimulationTime() runs at wall speed and the
+        // playback speed (x0.1 .. x2) is getTimeFactor(). When the speed changes, the viewer rescales
+        // its clock so that simulation time x speed stays continuous (probe 2026-10-21: x1 -> x2 turns
+        // 15.65 into 7.85). That product is the clip's own time, so its increase per frame is recorded.
+        // Slow playback gives more samples; the clip still exports at x1. Falls back to wall-clock time
+        // x speed if the manager clock is unavailable.
         const speedNow = () => {
             let f;
             try { f = typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor; } catch (e) { f = mgr._timeFactor; }
             return (typeof f === 'number' && isFinite(f) && f > 0) ? f : 1;
         };
         let useSim = typeof mgr.getSimulationTime === 'function';
-        let prevClock = null, clipT = 0, lastT = -1, lastSeen = -1, frames = [];
+        let prevSim = null, prevWall = null, clipT = 0, lastT = -1, lastSeen = -1, frames = [];
         let lastAdvanceWall = performance.now() / 1000;
         const speed0 = speedNow();
-        function rawClock() {
+        function advance(d) { if (d > 0) { clipT += d; lastAdvanceWall = performance.now() / 1000; } }
+        function clockNow() {
             if (useSim) {
                 const s = mgr.getSimulationTime();
-                if (typeof s === 'number' && isFinite(s)) return s;
+                if (typeof s === 'number' && isFinite(s)) {
+                    const scaled = s * speedNow();
+                    if (prevSim !== null) advance(scaled - prevSim);   // a backward step (seek) adds nothing
+                    prevSim = scaled;
+                    return clipT;
+                }
                 warn(`sim clock returned ${s}, falling back to wall clock`);
                 useSim = false;
-                prevClock = null;   // restart the deltas on the new clock
             }
-            return performance.now() / 1000;
-        }
-        function clockNow() {
-            const c = rawClock();
-            if (prevClock !== null) {
-                const d = c - prevClock;
-                if (d > 0) { clipT += d * speedNow(); lastAdvanceWall = performance.now() / 1000; }
-            }
-            prevClock = c;
+            const w = performance.now() / 1000;
+            if (prevWall !== null) advance((w - prevWall) * speedNow());
+            prevWall = w;
             return clipT;
         }
         // Samples cover [0, duration). The closing frame at t = duration is a copy
