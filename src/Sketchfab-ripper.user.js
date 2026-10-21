@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.6.0
+// @version      1.7.0
 // @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @name:pl         Sketchfab Ripper
 // @description:pl  Pobieraj modele ze Sketchfab jako GLB lub FBX: szkielet, nagrane klipy animacji, tekstury PBR, kolory wierzchołków, klucze kształtu
@@ -30,6 +30,8 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.js
 // @run-at       document-start
 // @grant        unsafeWindow
+// @inject-into  page
+// @sandbox      JavaScript
 // @homepageURL  https://github.com/anotherRandomPersonlol/Sketchfab-Ripper
 // @supportURL   https://github.com/anotherRandomPersonlol/Sketchfab-Ripper/issues
 // ==/UserScript==
@@ -44,7 +46,6 @@
     window.recordingStartTime  = 0;
     window.recordingRafId      = null;
     window.clips               = [];     // [{ name, uid, frames }]
-    window.clipDefs            = [];     // [{ index, uid, name, duration }]
     window.clipRecording       = false;
     window.clipCancel          = false;  // set by the CANCEL button during RECORD ALL CLIPS
     window.autoRecordActive    = false;  // single-clip RECORD is running in auto (one full loop) mode
@@ -58,6 +59,10 @@
     let button_dw       = false;
     let _exporting      = false;   // true while downloadGLB runs (read by the recorders, which are defined first)
 
+
+    // ====================================================================
+    // Settings (CONFIG, saved in localStorage)
+    // ====================================================================
     const CONFIG = {
         MAX_RECORD_SECONDS: 12,
         AUTO_RELOAD_ON_FAILURE: true,
@@ -94,12 +99,26 @@
         } catch (e) { /* ignore */ }
     }
 
+    let _saveWarned = false;
     function saveConfig() {
         try { localStorage.setItem(CONFIG_KEY, JSON.stringify(CONFIG)); }
-        catch (e) { /* ignore */ }
+        catch (e) {
+            // private mode or blocked storage: the setting works until the page closes
+            if (!_saveWarned) { _saveWarned = true; warn('settings could not be saved (storage blocked), they reset on reload:', e.message); }
+        }
     }
 
     loadConfig();
+
+    // ====================================================================
+    // Logging
+    // ====================================================================
+    const TAG = '[Ripper]';
+    function log(...args)  { console.log(TAG, ...args); }
+    function warn(...args) { console.warn(TAG, ...args); }
+    function err(...args)  { console.error(TAG, ...args); }
+
+    log('init');
 
     // ====================================================================
     // UI text: English base + translations (the console log stays English)
@@ -1080,22 +1099,6 @@
         return fillVars(s[form] || s.other || s.one, Object.assign({ n }, vars));
     }
 
-
-    // Z-up -> Y-up. Maps (x, y, z) -> (x, z, -y).
-    const YUP = [
-        1, 0, 0, 0,
-        0, 0, -1, 0,
-        0, 1, 0, 0,
-        0, 0, 0, 1
-    ];
-
-    const TAG = '[Ripper]';
-    function log(...args)  { console.log(TAG, ...args); }
-    function warn(...args) { console.warn(TAG, ...args); }
-    function err(...args)  { console.error(TAG, ...args); }
-
-    log('init');
-
     // ====================================================================
     // Math
     // ====================================================================
@@ -1114,15 +1117,6 @@
         if (!m || m.length !== 16) return null;
         const o = new Array(16);
         for (let i = 0; i < 16; i++) o[i] = m[i];
-        return o;
-    }
-
-    function mat4Mul(a, b) {
-        const o = new Array(16);
-        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
-            o[c*4+r] = a[0*4+r]*b[c*4+0] + a[1*4+r]*b[c*4+1]
-                     + a[2*4+r]*b[c*4+2] + a[3*4+r]*b[c*4+3];
-        }
         return o;
     }
 
@@ -1151,39 +1145,13 @@
         ];
     }
 
-    // Confirmed from OSG source: MatrixTransform stores local transform
-    // in `.matrix` and exposes it via `getMatrix()`.
-    function getLocalNodeMatrix(node) {
-        if (!node) return identityMat4();
-        if (typeof node.getMatrix === 'function') {
-            try {
-                const m1 = matToArr(node.getMatrix());
-                if (m1) return m1;
-            } catch (e) {}
-        }
-        if (node.matrix) {
-            const m2 = matToArr(node.matrix);
-            if (m2) return m2;
-        }
-        if (node._matrix) {
-            const m3 = matToArr(node._matrix);
-            if (m3) return m3;
-        }
-        return identityMat4();
-    }
-
-    function computeWorldMatrix(obj) {
-        const chain = [];
-        let curr = obj;
-        let guard = 0;
-        while (curr && guard++ < 64) {
-            chain.unshift(getLocalNodeMatrix(curr));
-            curr = curr._parents && curr._parents[0];
-        }
-        let world = identityMat4();
-        for (let i = 0; i < chain.length; i++) world = mat4Mul(world, chain[i]);
-        return world;
-    }
+    // Z-up -> Y-up. Maps (x, y, z) -> (x, z, -y).
+    const YUP = [
+        1, 0, 0, 0,
+        0, 0, -1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1
+    ];
 
     // ====================================================================
     // Sheared joint matrices: M = T * U * diag(s) * Vt (exact for any 3x3), stored as two glTF nodes
@@ -1383,40 +1351,40 @@
     }
 
     // ====================================================================
-    // Texture capture
+    // Viewer access: node matrices, materials, morph targets (read only)
     // ====================================================================
-    const _usedTextureNames = {};
-
-    function sanitizeTextureName(raw) {
-        if (!raw) return '';
-        let s = String(raw);
-        try { s = decodeURIComponent(s); } catch (e) {}
-        s = s.replace(/\.(jpe?g|png|webp|gif|ktx2?|basis|tga|bmp)$/i, '');
-        s = s.replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').trim();
-        return s;
+    // Confirmed from OSG source: MatrixTransform stores local transform
+    // in `.matrix` and exposes it via `getMatrix()`.
+    function getLocalNodeMatrix(node) {
+        if (!node) return identityMat4();
+        if (typeof node.getMatrix === 'function') {
+            try {
+                const m1 = matToArr(node.getMatrix());
+                if (m1) return m1;
+            } catch (e) {}
+        }
+        if (node.matrix) {
+            const m2 = matToArr(node.matrix);
+            if (m2) return m2;
+        }
+        if (node._matrix) {
+            const m3 = matToArr(node._matrix);
+            if (m3) return m3;
+        }
+        return identityMat4();
     }
 
-    function deriveTextureName(url) {
-        if (!url) return 'texture';
-        const clean = String(url).split('?')[0].split('#')[0];
-        const base = clean.substring(clean.lastIndexOf('/') + 1);
-        const s = sanitizeTextureName(base);
-        return s || 'texture';
-    }
-
-    function pickTextureName(imagemodel, url) {
-        // Prefer Sketchfab's metadata name (semantic, e.g.
-        // "Patriot_Radar_Body_D_Desert"). Fall back to URL base if
-        // metadata is missing or empty.
-        const metaName = imagemodel && imagemodel.attributes && imagemodel.attributes.name;
-        const s = sanitizeTextureName(metaName);
-        if (s) return s;
-        return deriveTextureName(url);
-    }
-
-    function normalizeUrl(u) {
-        if (!u) return '';
-        return String(u).split('?')[0].split('#')[0].replace(/\/+$/, '');
+    function computeWorldMatrix(obj) {
+        const chain = [];
+        let curr = obj;
+        let guard = 0;
+        while (curr && guard++ < 64) {
+            chain.unshift(getLocalNodeMatrix(curr));
+            curr = curr._parents && curr._parents[0];
+        }
+        let world = identityMat4();
+        for (let i = 0; i < chain.length; i++) world = mulMat4(world, chain[i]);
+        return world;
     }
 
     // Read Sketchfab's per-mesh channel -> source-texture mapping.
@@ -1469,7 +1437,7 @@
                 }
                 // Which channels have a texture: the stateset's channel mapping (>= 0 = texture unit).
                 out.__map = a0._channelMapping || null;
-                out.__cull = mm.attributes.cullFace;   // 0 = Single Sided OFF; ON value to be confirmed from logs
+                out.__cull = mm.attributes.cullFace;   // 1029 (GL_BACK) = Single Sided ON, 0 = OFF
                 return out;
             }
             cur = cur._parents && cur._parents[0];
@@ -1511,240 +1479,6 @@
         return map;
     }
 
-    window.drawhookcanvas = (e, imagemodel) => {
-        try {
-            if (!e) return e;
-            // 32/64/128 px square images are usually low-res placeholders of a bigger texture; they are
-            // skipped only while a larger variant exists (a texture whose real size is 128 px is kept).
-            const isSmall = (e.width === 128 && e.height === 128) ||
-                          (e.width === 32  && e.height === 32)  ||
-                          (e.width === 64  && e.height === 64);
-            if (isSmall && !(imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images)) return e;
-            if (imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images) {
-                const alpha = e.options.format;
-                let url_image = e.url, max_size = 0, obr = e;
-                imagemodel.attributes.images.forEach((img) => {
-                    const ok = alpha === 'A' ? img.options.format === alpha : true;
-                    let d = img.width; while (d > 0 && d % 2 === 0) d = d / 2;
-                    if (img.size > max_size && ok && d === 1) {
-                        max_size = img.size; url_image = img.url; obr = img;
-                    }
-                });
-                if (isSmall && !(obr && obr.width <= e.width)) return e;   // a larger variant will come
-                if (!saveimagecache2[url_image]) {
-                    const base = pickTextureName(imagemodel, url_image);
-                    let texName = base, n = 1;
-                    while (_usedTextureNames[texName]) texName = `${base}_${n++}`;
-                    _usedTextureNames[texName] = true;
-                    saveimagecache2[url_image] = { name: texName };
-                }
-                return obr;
-            }
-        } catch (e2) { warn('drawhookcanvas', e2.message); }
-        return e;
-    };
-
-    window.drawhookimg = (gl, t) => {
-        try {
-            const url = t[5].currentSrc, width = t[5].width, height = t[5].height;
-            if (!saveimagecache2[url]) return;
-            if (saveimagecache2[url].dataURL) return;
-            const data = new Uint8Array(width * height * 4);
-            gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
-            const hh = height / 2 | 0, bpr = width * 4, temp = new Uint8Array(width * 4);
-            for (let y = 0; y < hh; ++y) {
-                const t0 = y * bpr, b0 = (height - y - 1) * bpr;
-                temp.set(data.subarray(t0, t0 + bpr));
-                data.copyWithin(t0, b0, b0 + bpr);
-                data.set(temp, b0);
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = width; canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            const id = ctx.createImageData(width, height);
-            id.data.set(data);
-            ctx.putImageData(id, 0, 0);
-            const isJpeg = /\.(jpe?g)(?:\?|$)/i.test(url);
-            const mime   = isJpeg ? 'image/jpeg' : 'image/png';
-            const ext    = isJpeg ? '.jpg' : '.png';
-            const q      = isJpeg ? 0.92 : undefined;
-            const name   = saveimagecache2[url].name + ext;
-            saveimagecache2[url].fileExt = ext;
-            saveimagecache2[url].dataURL = true;   // capture flag only (a base64 copy was never read)
-            canvas.toBlob((b) => { objects[name] = b; }, mime, q);
-        } catch (e) { warn('drawhookimg', e.message); }
-    };
-
-    // ====================================================================
-    // attachbody
-    // ====================================================================
-    function geomKey(o, noIndices) {
-        const v = o && o._attributes && o._attributes.Vertex && o._attributes.Vertex._elements;
-        if (!v || !v.length) return '';
-        let n = v.length, parts = [n], k;
-        for (k = 0; k < 16; k++) parts.push(v[Math.floor(k * (n - 1) / 15)]);
-        if (!noIndices) {
-            const pr = o._primitives && o._primitives[0];
-            parts.push(pr && pr.indices && pr.indices._elements ? pr.indices._elements.length : -1);
-        }
-        return parts.join(',');
-    }
-
-    // The viewer can hold a second copy of a mesh that only has LINES (its wireframe display).
-    // It has the same vertices as the real mesh but no triangles. Returns the index of the real
-    // mesh when obj is such an overlay, otherwise -1. A line mesh with no twin is real and is kept.
-    function wireOverlayTwin(list, idx) {
-        let obj = list[idx], prims = obj && obj._primitives, i, p, hasLines = false, key;
-        if (!prims || !prims.length) return -1;
-        for (i = 0; i < prims.length; i++) {
-            p = prims[i];
-            if (!p || !p.indices) continue;
-            if (p.mode === 1 || p.mode === 2 || p.mode === 3) hasLines = true;
-            else return -1;   // has a triangle (or point) primitive: not an overlay
-        }
-        if (!hasLines) return -1;
-        key = geomKey(obj, true);
-        if (!key) return -1;
-        for (i = 0; i < list.length; i++) {
-            let o2 = list[i], pr2 = o2 && o2._primitives, j, tri = false;
-            if (i === idx || !pr2 || geomKey(o2, true) !== key) continue;
-            for (j = 0; j < pr2.length; j++) {
-                const m2 = pr2[j] && pr2[j].mode;
-                if (pr2[j] && pr2[j].indices && (m2 === undefined || m2 === null || m2 === 4 || m2 === 5 || m2 === 6)) tri = true;
-            }
-            if (tri) return i;
-        }
-        return -1;
-    }
-
-    // Keyframe reduction. Keeps the first and last key, and every key that is needed so that
-    // interpolation between the kept keys stays within tol of each recorded sample (per component).
-    // Rotations (isQuat) are checked with slerp, as glTF interpolates them. A segment spans at most
-    // maxSpan recorded frames, which limits the run time. Returns the indices of the kept keys.
-    function reduceKeys(times, vals, n, tol, isQuat, maxSpan) {
-        let nk = times.length, keep = [0], i = 0, j, k, c, ok, best, tmp = [0, 0, 0, 0];
-        if (nk < 3) { for (k = 1; k < nk; k++) keep.push(k); return keep; }
-        function interp(a, b, u) {
-            const ia = a * n, ib = b * n;
-            if (isQuat && n === 4) {
-                let dt = vals[ia] * vals[ib] + vals[ia + 1] * vals[ib + 1] + vals[ia + 2] * vals[ib + 2] + vals[ia + 3] * vals[ib + 3];
-                let sg = dt < 0 ? -1 : 1, w0, w1;
-                dt = Math.abs(dt);
-                if (dt > 0.9995) { w0 = 1 - u; w1 = u; }
-                else {
-                    const th = Math.acos(Math.min(1, dt)), sn = Math.sin(th);
-                    w0 = Math.sin((1 - u) * th) / sn; w1 = Math.sin(u * th) / sn;
-                }
-                let len = 0;
-                for (c = 0; c < 4; c++) { tmp[c] = w0 * vals[ia + c] + sg * w1 * vals[ib + c]; len += tmp[c] * tmp[c]; }
-                len = Math.sqrt(len) || 1;
-                for (c = 0; c < 4; c++) tmp[c] /= len;
-            } else {
-                for (c = 0; c < n; c++) tmp[c] = vals[ia + c] + (vals[ib + c] - vals[ia + c]) * u;
-            }
-        }
-        while (i < nk - 1) {
-            best = i + 1;
-            for (j = i + 2; j < nk && j - i <= maxSpan; j++) {
-                ok = true;
-                const span = times[j] - times[i];
-                for (k = i + 1; k < j && ok; k++) {
-                    interp(i, j, span > 0 ? (times[k] - times[i]) / span : 0);
-                    for (c = 0; c < n; c++) if (Math.abs(tmp[c] - vals[k * n + c]) > tol) { ok = false; break; }
-                }
-                if (!ok) break;
-                best = j;
-            }
-            keep.push(best);
-            i = best;
-        }
-        return keep;
-    }
-
-    // Remove nodes (the skipped wireframe overlay) and renumber every reference to a node.
-    // Changes the list in place and returns the new index of the scene root.
-    function removeNodes(nodes, skins, animations, drop, rootIdx) {
-        let remap = [], kept = [], i;
-        for (i = 0; i < nodes.length; i++) {
-            if (drop[i]) remap.push(-1);
-            else { remap.push(kept.length); kept.push(nodes[i]); }
-        }
-        kept.forEach((n) => {
-            if (!n.children) return;
-            const c2 = [];
-            n.children.forEach((c) => { if (remap[c] >= 0) c2.push(remap[c]); });
-            n.children = c2;
-        });
-        skins.forEach((sk) => {
-            sk.joints = sk.joints.map((j) => remap[j]);
-            if (typeof sk.skeleton === 'number') sk.skeleton = remap[sk.skeleton];
-        });
-        (animations || []).forEach((a) => {
-            a.channels.forEach((c) => {
-                if (c.target && typeof c.target.node === 'number') c.target.node = remap[c.target.node];
-            });
-        });
-        nodes.length = 0;
-        kept.forEach((n) => { nodes.push(n); });
-        return remap[rootIdx];
-    }
-
-    window.attachbody = (obj) => {
-        try {
-            if (!obj || obj._faked === true) return;
-            const name = obj._name;
-            const ssName = obj.stateset && obj.stateset._name;
-            const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
-            if (!name && !ssName && !pName) return;
-            obj._faked = true;
-            if (name === 'composer layer' || name === 'Ground - Geometry') return;
-            
-            // Dedupe: viewer re-instantiates meshes when WebGL contexts
-            // get recycled. A new obj has _faked = false again, so the
-            // basic guard doesn't catch it. Merge by name + vertex count.
-            // M_Patriot_Radar_Tires legitimately appears twice with
-            // DIFFERENT vertex counts, so this won't merge them.
-            const displayName = ssName || name || '';
-            const vcount = (obj._attributes && obj._attributes.Vertex &&
-                        obj._attributes.Vertex._elements)
-                        ? obj._attributes.Vertex._elements.length : 0;
-            // Name + vertex count alone is not enough: big models are split into unnamed chunks that
-            // often have the same vertex count (e.g. 65532), so also compare sampled vertex data.
-            const gk = geomKey(obj);
-            for (let i = 0; i < window.allmodel.length; i++) {
-                const ex = window.allmodel[i];
-                if (!ex) continue;
-                const exName = (ex.stateset && ex.stateset._name) || ex._name || '';
-                if (exName !== displayName) continue;
-                const exVcount = (ex._attributes && ex._attributes.Vertex &&
-                                ex._attributes.Vertex._elements)
-                            ? ex._attributes.Vertex._elements.length : 0;
-                if (exVcount === vcount && geomKey(ex) === gk) {
-                    // Same name + vertex count but a different world position may be a
-                    // genuine second instance (e.g. repeated parts), not a re-instantiation.
-                    // Animated parents also move a mesh, so by default this only warns and
-                    // still merges (unchanged behaviour). Set DEDUPE_STRICT_WORLD to keep both.
-                    let wNew = computeWorldMatrix(obj), wEx = computeWorldMatrix(ex), wd = 0;
-                    for (let wi = 12; wi < 15; wi++) wd = Math.max(wd, Math.abs(wNew[wi] - wEx[wi]));
-                    if (wd > 1e-3) {
-                        warn('attachbody: "' + displayName + '" matches an existing mesh but sits ' +
-                             wd.toFixed(4) + ' away; ' +
-                             (CONFIG.DEDUPE_STRICT_WORLD ? 'keeping both' : 'merging (DEDUPE_STRICT_WORLD off)'));
-                        if (CONFIG.DEDUPE_STRICT_WORLD) continue;
-                    }
-                    // Replace so the latest instance (with live palette)
-                    // is what we read from during recording.
-                    window.allmodel[i] = obj;
-                    return;
-                }
-            }
-            window.allmodel.push(obj);
-        } catch (e) { err('attachbody', e.message); }
-    };
-
-    // ====================================================================
-    // Recorder
-    // ====================================================================
     // Morph targets: the viewer keeps target k's absolute vertex data in attribute
     // Vertex_k (Normal_k) and the live blend weights in obj._targetWeights.
     function morphTargetCount(obj) {
@@ -1756,43 +1490,6 @@
             if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
         }
         return n;
-    }
-
-    function unitNormals(a) {
-        let o = new Float32Array(a.length), i, x, y, z, l;
-        for (i = 0; i + 2 < a.length; i += 3) {
-            x = a[i]; y = a[i + 1]; z = a[i + 2];
-            l = Math.sqrt(x * x + y * y + z * z);
-            if (l > 1e-12) { o[i] = x / l; o[i + 1] = y / l; o[i + 2] = z / l; }
-            else { o[i] = 0; o[i + 1] = 1; o[i + 2] = 0; }
-        }
-        return o;
-    }
-
-    function snapshotFrame() {
-        const meshesOut = [];
-        window.allmodel.forEach((obj) => {
-            const world = computeWorldMatrix(obj);
-            let wts = null;
-            try {
-                const nT = morphTargetCount(obj);
-                if (nT && obj._targetWeights) {
-                    wts = new Float32Array(nT);
-                    for (let wi = 0; wi < nT; wi++) wts[wi] = obj._targetWeights[wi] || 0;
-                }
-            } catch (e) {}
-            let pal = null;
-            try {
-                const impl = obj._rigTransformImplementation;
-                if (impl && impl._skinningAttribute && impl._skinningAttribute._matrixPalette) {
-                    const src = impl._skinningAttribute._matrixPalette;
-                    pal = new Float32Array(src.length);
-                    for (let i = 0; i < src.length; i++) pal[i] = src[i];
-                }
-            } catch (e) {}
-            meshesOut.push({ world, palette: pal, weights: wts });
-        });
-        return { meshes: meshesOut };
     }
 
     // ====================================================================
@@ -1884,6 +1581,261 @@
         }
         rig.cache.set(pal, L);
         return L;
+    }
+
+    // ====================================================================
+    // Viewer access: animation manager and clip list
+    // ====================================================================
+    let _clipMgrCache = null;
+
+    function findAnimationManager() {
+        if (_clipMgrCache && _clipMgrCache._instanceAnimations) return _clipMgrCache;
+        let cur = window.allmodel[0], guard = 0;
+        while (cur && guard++ < 64) {
+            const cbs = cur._updateCallbacks || [];
+            for (let i = 0; i < cbs.length; i++) {
+                const c = cbs[i];
+                if (c && c._instanceAnimations && typeof c.stopAllAnimation === 'function') {
+                    _clipMgrCache = c;
+                    return c;
+                }
+            }
+            cur = cur._parents && cur._parents[0];
+        }
+        return null;
+    }
+
+    function getClipCount() {
+        const mgr = findAnimationManager();
+        return mgr ? Object.keys(mgr._instanceAnimations).length : 0;
+    }
+
+    function waitFrames(n, cb) {
+        if (n <= 0) { cb(); return; }
+        requestAnimationFrame(() => { waitFrames(n - 1, cb); });
+    }
+
+    function activeClipUids(mgr) {
+        const out = [];
+        const list = mgr._activeAnimationList || [];
+        for (let i = 0; i < list.length; i++) out.push(list[i].name);
+        return out;
+    }
+
+    // UI class names can change; try the known selector first, then looser ones.
+    // Non-clip items are harmless: discovery skips any item that activates no clip.
+    const CLIP_ITEM_SELECTORS = [
+        '.animation-list .animation-item',
+        '[class*="animation"][class*="list"] li',
+        'li[class*="animation-item"]'
+    ];
+
+    function getClipItems() {
+        for (let s = 0; s < CLIP_ITEM_SELECTORS.length; s++) {
+            const found = document.querySelectorAll(CLIP_ITEM_SELECTORS[s]);
+            if (found.length) return found;
+        }
+        return [];
+    }
+
+    // ====================================================================
+    // Capture hooks: textures (drawhookcanvas, drawhookimg)
+    // ====================================================================
+    const _usedTextureNames = {};
+
+    function sanitizeTextureName(raw) {
+        if (!raw) return '';
+        let s = String(raw);
+        try { s = decodeURIComponent(s); } catch (e) {}
+        s = s.replace(/\.(jpe?g|png|webp|gif|ktx2?|basis|tga|bmp)$/i, '');
+        s = s.replace(/[<>:"\/\\|?*\x00-\x1f]/g, '_').trim();
+        return s;
+    }
+
+    function deriveTextureName(url) {
+        if (!url) return 'texture';
+        const clean = String(url).split('?')[0].split('#')[0];
+        const base = clean.substring(clean.lastIndexOf('/') + 1);
+        const s = sanitizeTextureName(base);
+        return s || 'texture';
+    }
+
+    function pickTextureName(imagemodel, url) {
+        // Prefer Sketchfab's metadata name (semantic, e.g.
+        // "Patriot_Radar_Body_D_Desert"). Fall back to URL base if
+        // metadata is missing or empty.
+        const metaName = imagemodel && imagemodel.attributes && imagemodel.attributes.name;
+        const s = sanitizeTextureName(metaName);
+        if (s) return s;
+        return deriveTextureName(url);
+    }
+
+    function normalizeUrl(u) {
+        if (!u) return '';
+        return String(u).split('?')[0].split('#')[0].replace(/\/+$/, '');
+    }
+
+    window.drawhookcanvas = (e, imagemodel) => {
+        try {
+            if (!e) return e;
+            // 32/64/128 px square images are usually low-res placeholders of a bigger texture; they are
+            // skipped only while a larger variant exists (a texture whose real size is 128 px is kept).
+            const isSmall = (e.width === 128 && e.height === 128) ||
+                          (e.width === 32  && e.height === 32)  ||
+                          (e.width === 64  && e.height === 64);
+            if (isSmall && !(imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images)) return e;
+            if (imagemodel && e.options && imagemodel.attributes && imagemodel.attributes.images) {
+                const alpha = e.options.format;
+                let url_image = e.url, max_size = 0, obr = e;
+                imagemodel.attributes.images.forEach((img) => {
+                    const ok = alpha === 'A' ? img.options.format === alpha : true;
+                    let d = img.width; while (d > 0 && d % 2 === 0) d = d / 2;
+                    if (img.size > max_size && ok && d === 1) {
+                        max_size = img.size; url_image = img.url; obr = img;
+                    }
+                });
+                if (isSmall && !(obr && obr.width <= e.width)) return e;   // a larger variant will come
+                if (!saveimagecache2[url_image]) {
+                    const base = pickTextureName(imagemodel, url_image);
+                    let texName = base, n = 1;
+                    while (_usedTextureNames[texName]) texName = `${base}_${n++}`;
+                    _usedTextureNames[texName] = true;
+                    saveimagecache2[url_image] = { name: texName };
+                }
+                return obr;
+            }
+        } catch (e2) { warn('drawhookcanvas', e2.message); }
+        return e;
+    };
+
+    window.drawhookimg = (gl, t) => {
+        try {
+            if (!t || !t[5]) return;   // this runs per draw: a missing image must not warn every frame
+            const url = t[5].currentSrc, width = t[5].width, height = t[5].height;
+            if (!saveimagecache2[url]) return;
+            if (saveimagecache2[url].dataURL) return;
+            const data = new Uint8Array(width * height * 4);
+            gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+            const hh = height / 2 | 0, bpr = width * 4, temp = new Uint8Array(width * 4);
+            for (let y = 0; y < hh; ++y) {
+                const t0 = y * bpr, b0 = (height - y - 1) * bpr;
+                temp.set(data.subarray(t0, t0 + bpr));
+                data.copyWithin(t0, b0, b0 + bpr);
+                data.set(temp, b0);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            const id = ctx.createImageData(width, height);
+            id.data.set(data);
+            ctx.putImageData(id, 0, 0);
+            const isJpeg = /\.(jpe?g)(?:\?|$)/i.test(url);
+            const mime   = isJpeg ? 'image/jpeg' : 'image/png';
+            const ext    = isJpeg ? '.jpg' : '.png';
+            const q      = isJpeg ? 0.92 : undefined;
+            const name   = saveimagecache2[url].name + ext;
+            saveimagecache2[url].fileExt = ext;
+            saveimagecache2[url].dataURL = true;   // capture flag only (a base64 copy was never read)
+            canvas.toBlob((b) => { objects[name] = b; canvas.width = 0; }, mime, q);
+        } catch (e) { warn('drawhookimg', e.message); }
+    };
+
+    // ====================================================================
+    // Capture hooks: meshes (attachbody)
+    // ====================================================================
+    function geomKey(o, noIndices) {
+        const v = o && o._attributes && o._attributes.Vertex && o._attributes.Vertex._elements;
+        if (!v || !v.length) return '';
+        let n = v.length, parts = [n], k;
+        for (k = 0; k < 16; k++) parts.push(v[Math.floor(k * (n - 1) / 15)]);
+        if (!noIndices) {
+            const pr = o._primitives && o._primitives[0];
+            parts.push(pr && pr.indices && pr.indices._elements ? pr.indices._elements.length : -1);
+        }
+        return parts.join(',');
+    }
+
+    window.attachbody = (obj) => {
+        try {
+            if (!obj || obj._faked === true) return;
+            const name = obj._name;
+            const ssName = obj.stateset && obj.stateset._name;
+            const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
+            if (!name && !ssName && !pName) return;
+            obj._faked = true;
+            if (name === 'composer layer' || name === 'Ground - Geometry') return;
+            
+            // Dedupe: viewer re-instantiates meshes when WebGL contexts
+            // get recycled. A new obj has _faked = false again, so the
+            // basic guard doesn't catch it. Merge when name, vertex count
+            // and the sampled vertex data (geomKey) all match.
+            // M_Patriot_Radar_Tires legitimately appears twice with
+            // DIFFERENT vertex counts, so this won't merge them.
+            const displayName = ssName || name || '';
+            const vcount = (obj._attributes && obj._attributes.Vertex &&
+                        obj._attributes.Vertex._elements)
+                        ? obj._attributes.Vertex._elements.length : 0;
+            // Name + vertex count alone is not enough: big models are split into unnamed chunks that
+            // often have the same vertex count (e.g. 65532), so also compare sampled vertex data.
+            const gk = geomKey(obj);
+            for (let i = 0; i < window.allmodel.length; i++) {
+                const ex = window.allmodel[i];
+                if (!ex) continue;
+                const exName = (ex.stateset && ex.stateset._name) || ex._name || '';
+                if (exName !== displayName) continue;
+                const exVcount = (ex._attributes && ex._attributes.Vertex &&
+                                ex._attributes.Vertex._elements)
+                            ? ex._attributes.Vertex._elements.length : 0;
+                if (exVcount === vcount && geomKey(ex) === gk) {
+                    // Same name + vertex count but a different world position may be a
+                    // genuine second instance (e.g. repeated parts), not a re-instantiation.
+                    // Animated parents also move a mesh, so by default this only warns and
+                    // still merges (unchanged behaviour). Set DEDUPE_STRICT_WORLD to keep both.
+                    let wNew = computeWorldMatrix(obj), wEx = computeWorldMatrix(ex), wd = 0;
+                    for (let wi = 12; wi < 15; wi++) wd = Math.max(wd, Math.abs(wNew[wi] - wEx[wi]));
+                    if (wd > 1e-3) {
+                        warn('attachbody: "' + displayName + '" matches an existing mesh but sits ' +
+                             wd.toFixed(4) + ' away; ' +
+                             (CONFIG.DEDUPE_STRICT_WORLD ? 'keeping both' : 'merging (DEDUPE_STRICT_WORLD off)'));
+                        if (CONFIG.DEDUPE_STRICT_WORLD) continue;
+                    }
+                    // Replace so the latest instance (with live palette)
+                    // is what we read from during recording.
+                    window.allmodel[i] = obj;
+                    return;
+                }
+            }
+            window.allmodel.push(obj);
+        } catch (e) { err('attachbody', e.message); }
+    };
+
+    // ====================================================================
+    // Recorder: frames, single clip, all clips
+    // ====================================================================
+    function snapshotFrame() {
+        const meshesOut = [];
+        window.allmodel.forEach((obj) => {
+            const world = computeWorldMatrix(obj);
+            let wts = null;
+            try {
+                const nT = morphTargetCount(obj);
+                if (nT && obj._targetWeights) {
+                    wts = new Float32Array(nT);
+                    for (let wi = 0; wi < nT; wi++) wts[wi] = obj._targetWeights[wi] || 0;
+                }
+            } catch (e) {}
+            let pal = null;
+            try {
+                const impl = obj._rigTransformImplementation;
+                if (impl && impl._skinningAttribute && impl._skinningAttribute._matrixPalette) {
+                    const src = impl._skinningAttribute._matrixPalette;
+                    pal = new Float32Array(src.length);
+                    for (let i = 0; i < src.length; i++) pal[i] = src[i];
+                }
+            } catch (e) {}
+            meshesOut.push({ world, palette: pal, weights: wts });
+        });
+        return { meshes: meshesOut };
     }
 
     // True when a frame at time t should be kept for the chosen RECORD_FPS (0 = keep every frame).
@@ -1985,94 +1937,6 @@
         if (el) el.textContent = text;
     }
 
-    // ---------------- progress bars: stage (k of n) and sub-stage ----------------
-    let _progHideTimer = null;
-    function progStage(k, n, label) {
-        const box = document.getElementById('ripper-progress');
-        if (!box) return;
-        clearTimeout(_progHideTimer);
-        box.style.display = 'flex';
-        box.classList.remove('rp-err');
-        document.getElementById('rp-stage-fill').style.width = `${Math.round(100 * k / n)}%`;
-        document.getElementById('rp-stage-label').textContent = `${k}/${n} ${label}`;
-        progSub(0, '');
-    }
-    // frac < 0: work without a measurable fraction (striped bar)
-    function progSub(frac, label) {
-        const fill = document.getElementById('rp-sub-fill');
-        if (!fill) return;
-        const busy = frac < 0;
-        fill.classList.toggle('rp-busy', busy);
-        fill.style.width = busy ? '100%' : `${Math.round(100 * Math.max(0, Math.min(1, frac)))}%`;
-        const l = document.getElementById('rp-sub-label');
-        if (l) l.textContent = label || '';
-    }
-    function progDone(label, isErr) {
-        const box = document.getElementById('ripper-progress');
-        if (!box) return;
-        box.classList.toggle('rp-err', !!isErr);
-        document.getElementById('rp-stage-fill').style.width = '100%';
-        document.getElementById('rp-stage-label').textContent = label;
-        progSub(1, isErr ? i18n('pr_see_console') : '');
-        clearTimeout(_progHideTimer);
-        _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
-    }
-
-    // ====================================================================
-    // Animation clips
-    // ====================================================================
-    let _clipMgrCache = null;
-
-    function findAnimationManager() {
-        if (_clipMgrCache && _clipMgrCache._instanceAnimations) return _clipMgrCache;
-        let cur = window.allmodel[0], guard = 0;
-        while (cur && guard++ < 64) {
-            const cbs = cur._updateCallbacks || [];
-            for (let i = 0; i < cbs.length; i++) {
-                const c = cbs[i];
-                if (c && c._instanceAnimations && typeof c.stopAllAnimation === 'function') {
-                    _clipMgrCache = c;
-                    return c;
-                }
-            }
-            cur = cur._parents && cur._parents[0];
-        }
-        return null;
-    }
-
-    function getClipCount() {
-        const mgr = findAnimationManager();
-        return mgr ? Object.keys(mgr._instanceAnimations).length : 0;
-    }
-
-    function waitFrames(n, cb) {
-        if (n <= 0) { cb(); return; }
-        requestAnimationFrame(() => { waitFrames(n - 1, cb); });
-    }
-
-    function activeClipUids(mgr) {
-        const out = [];
-        const list = mgr._activeAnimationList || [];
-        for (let i = 0; i < list.length; i++) out.push(list[i].name);
-        return out;
-    }
-
-    // UI class names can change; try the known selector first, then looser ones.
-    // Non-clip items are harmless: discovery skips any item that activates no clip.
-    const CLIP_ITEM_SELECTORS = [
-        '.animation-list .animation-item',
-        '[class*="animation"][class*="list"] li',
-        'li[class*="animation-item"]'
-    ];
-
-    function getClipItems() {
-        for (let s = 0; s < CLIP_ITEM_SELECTORS.length; s++) {
-            const found = document.querySelectorAll(CLIP_ITEM_SELECTORS[s]);
-            if (found.length) return found;
-        }
-        return [];
-    }
-
     // Click list item k (the viewer does its own stop/start) and wait.
     function selectClipItem(k, cb) {
         const items = getClipItems();
@@ -2130,7 +1994,6 @@
                 if (defs[d].uid === origUid) { origIdx = defs[d].index; break; }
             }
             selectClipItem(origIdx, () => {
-                window.clipDefs = defs;
                 log(`discovered ${defs.length} clips`);
                 for (let q = 0; q < defs.length; q++) {
                     log('clip ' + defs[q].index + ': ' + defs[q].name +
@@ -2145,24 +2008,38 @@
     function recordClipRealtime(mgr, def, base, cb) {
         mgr.setSeekTime(base);
         if (mgr._pause) mgr.togglePause();
-        // Frame times come from the manager's own clock (getSimulationTime) so they
-        // match what the viewer is showing even if rAF drops frames or _timeFactor
-        // is not 1. Falls back to wall-clock time if that clock is unavailable.
-        const hasSimClock = typeof mgr.getSimulationTime === 'function';
-        let wall0 = performance.now() / 1000, sim0 = null, lastT = -1, lastSeen = -1, frames = [];
-        let useSim = hasSimClock;
+        // Frame times are clip time. The manager's clock getSimulationTime() runs at wall speed and the
+        // playback speed (x0.1 .. x2) is getTimeFactor(). When the speed changes, the viewer rescales
+        // its clock so that simulation time x speed stays continuous (probe 2026-10-21: x1 -> x2 turns
+        // 15.65 into 7.85). That product is the clip's own time, so its increase per frame is recorded.
+        // Slow playback gives more samples; the clip still exports at x1. Falls back to wall-clock time
+        // x speed if the manager clock is unavailable.
+        const speedNow = () => {
+            let f;
+            try { f = typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor; } catch (e) { f = mgr._timeFactor; }
+            return (typeof f === 'number' && isFinite(f) && f > 0) ? f : 1;
+        };
+        let useSim = typeof mgr.getSimulationTime === 'function';
+        let prevSim = null, prevWall = null, clipT = 0, lastT = -1, lastSeen = -1, frames = [];
+        let lastAdvanceWall = performance.now() / 1000;
+        const speed0 = speedNow();
+        function advance(d) { if (d > 0) { clipT += d; lastAdvanceWall = performance.now() / 1000; } }
         function clockNow() {
             if (useSim) {
                 const s = mgr.getSimulationTime();
                 if (typeof s === 'number' && isFinite(s)) {
-                    if (sim0 === null) sim0 = s;
-                    return s - sim0;
+                    const scaled = s * speedNow();
+                    if (prevSim !== null) advance(scaled - prevSim);   // a backward step (seek) adds nothing
+                    prevSim = scaled;
+                    return clipT;
                 }
                 warn(`sim clock returned ${s}, falling back to wall clock`);
                 useSim = false;
-                wall0 = performance.now() / 1000 - (lastT > 0 ? lastT : 0);
             }
-            return performance.now() / 1000 - wall0;
+            const w = performance.now() / 1000;
+            if (prevWall !== null) advance((w - prevWall) * speedNow());
+            prevWall = w;
+            return clipT;
         }
         // Samples cover [0, duration). The closing frame at t = duration is a copy
         // of frame 0 (the clip loops). We never keep a sample taken at or past the
@@ -2207,15 +2084,16 @@
                 frames.push({ time: t, meshes: snapshotFrame().meshes });
                 lastT = t;
             }
-            // Safety net: sim clock stuck, so end by wall time instead of looping forever.
-            if (performance.now() / 1000 - wall0 > def.duration + 3) {
+            // Safety net: the clip clock did not move for 3 s (paused viewer, stuck
+            // clock), so end instead of looping forever. Slow playback still moves it.
+            if (performance.now() / 1000 - lastAdvanceWall > 3) {
                 finish(`clock stalled at t=${t.toFixed(3)}`);
                 return;
             }
             lastSeen = t;   // last clock value seen (kept or skipped by RECORD_FPS), for end-of-clip detection
             requestAnimationFrame(tick);
         }
-        log(`clip clock: ${useSim ? 'manager simulation time' : 'wall clock'} (${def.name})`);
+        log(`clip clock: ${useSim ? 'manager simulation time' : 'wall clock'} x playback speed ${speed0} (${def.name})`);
         requestAnimationFrame(tick);
     }
 
@@ -2286,14 +2164,18 @@
         if (el) el.textContent = text;
     }
 
-    function endRecordAll(mgr, wasPaused, origIdx) {
+    // failed: discovery found no usable clips (shown as an error, not as "Recorded 0 clips")
+    function endRecordAll(mgr, wasPaused, origIdx, failed) {
         function reset() {
+            const cancelled = !!window.clipCancel;   // read before it is cleared
             window.clipRecording = false;
             window.clipCancel = false;
             window.clipProgress = '';
             setRecAllLabel(i18n('btn_rec_all'));
-            progDone(window.clipCancel ? i18n('pr_recording_cancelled') : i18nN('pr_recorded_clips', window.clips.length), !!window.clipCancel);
-            log(`record-all finished, clips recorded: ${window.clips.length}`);
+            if (failed) progDone(i18n('pr_recording_failed'), true);
+            else if (cancelled) progDone(i18n('pr_recording_cancelled'), true);
+            else progDone(i18nN('pr_recorded_clips', window.clips.length), false);
+            log(`record-all finished, clips recorded: ${window.clips.length}${cancelled ? ' (cancelled)' : ''}`);
         }
         try {
             selectClipItem(origIdx, () => {
@@ -2329,7 +2211,7 @@
             safeOrigIdx = origIdx;
             if (defs.length < 2) {
                 warn(`only ${defs.length} usable clip(s); single-clip path stays in use`);
-                endRecordAll(mgr, wasPaused, origIdx);
+                endRecordAll(mgr, wasPaused, origIdx, true);
                 return;
             }
             let i = 0;
@@ -2367,550 +2249,12 @@
         }
     }
 
-    // ====================================================================
-    // UI panel
-    // ====================================================================
     // A hidden tab stops requestAnimationFrame: the viewer stops rendering and recording skips frames.
     document.addEventListener('visibilitychange', () => {
         if (document.hidden && (window.animationRecording || window.clipRecording)) {
             warn('tab hidden during recording: rendering pauses, frames will be skipped or the clip may be truncated; keep the tab visible');
         }
     });
-
-    // Builds the panel again (after a language change), at the same place.
-    let _panelTimers = [];
-    function rebuildPanel(keepOpen) {
-        const old = document.getElementById('ripper-panel');
-        const pos = old ? { left: old.style.left, top: old.style.top, right: old.style.right } : null;
-        _panelTimers.forEach(clearInterval); _panelTimers = [];
-        if (old) old.remove();
-        button_dw = false;
-        addbtnfunc(true, keepOpen, pos);
-    }
-
-    function addbtnfunc(rebuilt, keepOpen, keepPos) {
-        if (button_dw) return;
-        if (!document.body) { setTimeout(addbtnfunc, 500); return; }
-        if (document.getElementById('ripper-panel')) { button_dw = true; return; }
-
-        if (!document.getElementById('ripper-style')) {
-            const css = document.createElement('style');
-            css.id = 'ripper-style';
-            css.textContent = [
-                '#ripper-panel{position:fixed;top:70px;right:16px;z-index:2147483647;width:212px;box-sizing:border-box;background:rgba(24,25,28,.94);',
-                'backdrop-filter:blur(6px);border:1px solid #3a3d42;border-radius:12px;padding:10px;font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;',
-                'color:#e8eaed;display:flex;flex-direction:column;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.55)}',
-                '#ripper-panel .rp-head{display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid #3a3d42}',
-                '#ripper-panel .rp-title{flex:1;font-weight:700;letter-spacing:.06em;font-size:11px;color:#ff9f43;cursor:move;user-select:none}',
-                '#ripper-panel .rp-gear{cursor:pointer;color:#9aa0a6;font-size:15px;line-height:1;padding:2px 4px;border-radius:6px;user-select:none}',
-                '#ripper-panel .rp-gear:hover{background:#2f3236;color:#fff}',
-                '#ripper-panel .rp-sec{font-size:10px;font-weight:600;letter-spacing:.08em;color:#9aa0a6;text-transform:uppercase;margin-top:2px}',
-                '#ripper-panel .rp-row{display:flex;gap:6px}',
-                '#ripper-panel .rp-btn{flex:1;padding:8px 6px;border:0;border-radius:8px;color:#fff;font:600 11px system-ui,sans-serif;letter-spacing:.03em;cursor:pointer;',
-                'transition:background-color .15s,opacity .15s,transform .05s}',
-                '#ripper-panel .rp-btn:active{transform:translateY(1px)}',
-                '#ripper-panel .rp-dl{background:#1a73e8}#ripper-panel .rp-dl:hover{background:#1765cc}',
-                '#ripper-panel .rp-rec{background:#c5221f}#ripper-panel .rp-rec:hover{background:#a50e0e}',
-                '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
-                '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
-                '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
-                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;overflow-wrap:anywhere}',
-                '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
-                '#ripper-progress .rp-bar.rp-thin{height:4px}',
-                '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
-                '#ripper-progress .rp-thin .rp-fill{background:#5f9cf0}',
-                '#ripper-progress .rp-fill.rp-busy{background:repeating-linear-gradient(45deg,#5f9cf0 0 8px,#3c6fc2 8px 16px);background-size:22px 22px;animation:rp-stripe .7s linear infinite}',
-                '@keyframes rp-stripe{to{background-position:22px 0}}',
-                '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
-                '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
-                '#ripper-panel.rp-wide{width:270px}',
-                '#ripper-config>div>span{flex:1;min-width:0}',
-                '#ripper-config select{max-width:55%}',
-                '#ripper-config input,#ripper-config select{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
-            ].join('');
-            document.head.appendChild(css);
-        }
-
-        const panel = document.createElement('div');
-        panel.id = 'ripper-panel';
-
-        const titleRow = document.createElement('div');
-        titleRow.className = 'rp-head';
-
-        const title = document.createElement('div');
-        title.textContent = 'MODEL RIPPER';   // i18n-ok (name of the script)
-        title.className = 'rp-title';
-        titleRow.appendChild(title);
-
-        const gear = document.createElement('span');
-        gear.textContent = '⚙';
-        gear.title = i18n('settings');
-        gear.className = 'rp-gear';
-        titleRow.appendChild(gear);
-
-        panel.appendChild(titleRow);
-
-        function section(text) {
-            const d = document.createElement('div');
-            d.className = 'rp-sec'; d.textContent = text;
-            panel.appendChild(d);
-        }
-        function button(id, text, cls, onClick) {
-            const b = document.createElement('button');
-            if (id) b.id = id;
-            b.type = 'button';
-            b.className = `rp-btn ${cls}`;
-            b.textContent = text;
-            b.addEventListener('click', onClick);
-            return b;
-        }
-
-        section(i18n('sec_download'));
-        const dlRow = document.createElement('div');
-        dlRow.className = 'rp-row';
-        const btnDL = button('dlGlbBtn', i18n('btn_glb'), 'rp-dl', () => { downloadGLB('glb'); });
-        btnDL.title = i18n('tip_glb');
-        const btnFBX = button('dlFbxBtn', i18n('btn_fbx'), 'rp-dl', () => { downloadGLB('fbx'); });
-        btnFBX.title = i18n('tip_fbx');
-        dlRow.appendChild(btnDL);
-        dlRow.appendChild(btnFBX);
-        panel.appendChild(dlRow);
-
-        section(i18n('sec_animation'));
-        const btnRec = button('recBtnLabel', window.animationRecording ? i18n('btn_stop') : i18n('btn_rec_single'), 'rp-rec', () => {
-            if (!window.animationRecording) startRecording(); else stopRecording();
-        });
-        panel.appendChild(btnRec);
-
-        const btnAll = button('recAllBtn', window.clipRecording ? i18n('btn_cancel') : i18n('btn_rec_all'), 'rp-rec', () => {
-            if (window.clipRecording) {
-                window.clipCancel = true;
-                setRecAllLabel(i18n('btn_cancelling'));
-                log('record-all: cancel requested');
-                return;
-            }
-            recordAllClips();
-        });
-        panel.appendChild(btnAll);
-
-        const progBox = document.createElement('div');
-        progBox.id = 'ripper-progress';
-        progBox.innerHTML = '<div class="rp-lab"><span id="rp-stage-label"></span></div>'
-            + '<div class="rp-bar"><div class="rp-fill" id="rp-stage-fill"></div></div>'
-            + '<div class="rp-bar rp-thin"><div class="rp-fill" id="rp-sub-fill"></div></div>'
-            + '<div class="rp-lab"><span id="rp-sub-label"></span></div>';
-        panel.appendChild(progBox);
-
-        // Buttons that can't do anything right now are greyed out:
-        // RECORD SINGLE CLIP needs 1+ clips, RECORD ALL CLIPS needs 2+, downloads wait for recordings.
-        function setOff(b, off, why) {
-            b.disabled = off;
-            b.title = off ? why : (b.dataset.tip || '');
-        }
-        btnDL.dataset.tip = btnDL.title; btnFBX.dataset.tip = btnFBX.title;
-        function refreshAllBtn() {
-            let n = 0;
-            try { n = getClipCount(); } catch (e) {}
-            const recBusy = window.animationRecording || window.clipRecording;
-            btnRec.classList.toggle('rp-on', !!window.animationRecording);
-            btnAll.classList.toggle('rp-on', !!window.clipRecording);
-            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
-            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? i18n('tip_one_clip') : n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
-            setOff(btnDL, recBusy || _exporting, i18n('tip_busy_dl'));
-            setOff(btnFBX, recBusy || _exporting, i18n('tip_busy_dl'));
-        }
-        refreshAllBtn();
-        _panelTimers.push(setInterval(refreshAllBtn, 500));
-
-        const status = document.createElement('div');
-        status.id = 'ripper-status';
-        status.textContent = i18n('st_idle');
-        panel.appendChild(status);
-
-        // ---- config form (hidden until gear clicked) ----
-        const configDiv = document.createElement('div');
-        configDiv.id = 'ripper-config';
-        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
-
-        const rowL = document.createElement('div');
-        rowL.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelL = document.createElement('span');
-        labelL.textContent = i18n('set_language');
-        labelL.title = i18n('set_language_tip');
-        rowL.appendChild(labelL);
-        const selL = document.createElement('select');
-        selL.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])).forEach((o) => {
-            const op = document.createElement('option');
-            op.value = o[0]; op.textContent = o[1];
-            if ((CONFIG.LANGUAGE || 'auto') === o[0]) op.selected = true;
-            selL.appendChild(op);
-        });
-        selL.addEventListener('change', () => {
-            CONFIG.LANGUAGE = selL.value;
-            saveConfig();
-            log(`language set to ${selL.value} (${uiLang()})`);
-            rebuildPanel(true);
-        });
-        rowL.appendChild(selL);
-        configDiv.appendChild(rowL);
-
-        const row1 = document.createElement('div');
-        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label1 = document.createElement('span');
-        label1.textContent = i18n('set_max_seconds');
-        label1.title = i18n('set_max_seconds_tip');
-        row1.appendChild(label1);
-        const input1 = document.createElement('input');
-        input1.type = 'number';
-        input1.min = '1';
-        input1.max = '60';
-        input1.value = CONFIG.MAX_RECORD_SECONDS;
-        input1.style.cssText = 'width:52px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        input1.addEventListener('change', () => {
-            let v = parseInt(input1.value, 10);
-            if (isNaN(v) || v < 1) v = 1;
-            if (v > 60) v = 60;
-            input1.value = v;
-            CONFIG.MAX_RECORD_SECONDS = v;
-            saveConfig();
-        });
-        row1.appendChild(input1);
-        configDiv.appendChild(row1);
-
-        const rowF = document.createElement('div');
-        rowF.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const labelF = document.createElement('span');
-        labelF.textContent = i18n('set_fps');
-        labelF.title = i18n('set_fps_tip');
-        rowF.appendChild(labelF);
-        const selF = document.createElement('select');
-        selF.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']].forEach((o) => {
-            const op = document.createElement('option');
-            op.value = String(o[0]); op.textContent = o[1];
-            if ((+CONFIG.RECORD_FPS || 0) === o[0]) op.selected = true;
-            selF.appendChild(op);
-        });
-        selF.addEventListener('change', () => {
-            CONFIG.RECORD_FPS = parseInt(selF.value, 10) || 0;
-            saveConfig();
-            log(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
-        });
-        rowF.appendChild(selF);
-        configDiv.appendChild(rowF);
-
-        const row2 = document.createElement('div');
-        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label2 = document.createElement('span');
-        label2.textContent = i18n('set_reload');
-        label2.title = i18n('set_reload_tip');
-        row2.appendChild(label2);
-        const check2 = document.createElement('input');
-        check2.type = 'checkbox';
-        check2.checked = CONFIG.AUTO_RELOAD_ON_FAILURE;
-        check2.addEventListener('change', () => {
-            CONFIG.AUTO_RELOAD_ON_FAILURE = check2.checked;
-            saveConfig();
-        });
-        row2.appendChild(check2);
-        configDiv.appendChild(row2);
-
-        const row5 = document.createElement('div');
-        row5.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5 = document.createElement('span');
-        label5.textContent = i18n('set_double');
-        label5.title = i18n('set_double_tip');
-        row5.appendChild(label5);
-        const check5 = document.createElement('input');
-        check5.type = 'checkbox';
-        check5.checked = !!CONFIG.DOUBLE_SIDED;
-        check5.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED = check5.checked;
-            saveConfig();
-            log(`double sided set to ${check5.checked}`);
-        });
-        row5.appendChild(check5);
-        configDiv.appendChild(row5);
-
-        const row5b = document.createElement('div');
-        row5b.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5b = document.createElement('span');
-        label5b.textContent = i18n('set_single_auto');
-        label5b.title = i18n('set_single_auto_tip');
-        row5b.appendChild(label5b);
-        const check5b = document.createElement('input');
-        check5b.type = 'checkbox';
-        check5b.checked = !!CONFIG.DOUBLE_SIDED_AUTO;
-        check5b.addEventListener('change', () => {
-            CONFIG.DOUBLE_SIDED_AUTO = check5b.checked;
-            saveConfig();
-            log(`auto single sided set to ${check5b.checked}`);
-        });
-        row5b.appendChild(check5b);
-        configDiv.appendChild(row5b);
-
-        const row5c = document.createElement('div');
-        row5c.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5c = document.createElement('span');
-        label5c.textContent = i18n('set_slivers');
-        label5c.title = i18n('set_slivers_tip');
-        row5c.appendChild(label5c);
-        const check5c = document.createElement('input');
-        check5c.type = 'checkbox';
-        check5c.checked = !!CONFIG.DROP_STRIP_SLIVERS;
-        check5c.addEventListener('change', () => {
-            CONFIG.DROP_STRIP_SLIVERS = check5c.checked;
-            saveConfig();
-            log(`drop strip slivers set to ${check5c.checked}`);
-        });
-        row5c.appendChild(check5c);
-        configDiv.appendChild(row5c);
-
-        const row5d = document.createElement('div');
-        row5d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5d = document.createElement('span');
-        label5d.textContent = i18n('set_reduce');
-        label5d.title = i18n('set_reduce_tip');
-        row5d.appendChild(label5d);
-        const check5d = document.createElement('input');
-        check5d.type = 'checkbox';
-        check5d.checked = !!CONFIG.REDUCE_KEYS;
-        check5d.addEventListener('change', () => {
-            CONFIG.REDUCE_KEYS = check5d.checked;
-            saveConfig();
-            log(`reduce keyframes set to ${check5d.checked}`);
-        });
-        row5d.appendChild(check5d);
-        configDiv.appendChild(row5d);
-
-        const row5e = document.createElement('div');
-        row5e.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label5e = document.createElement('span');
-        label5e.textContent = i18n('set_still');
-        label5e.title = i18n('set_still_tip');
-        row5e.appendChild(label5e);
-        const check5e = document.createElement('input');
-        check5e.type = 'checkbox';
-        check5e.checked = !!CONFIG.KEEP_STILL_CLIPS;
-        check5e.addEventListener('change', () => {
-            CONFIG.KEEP_STILL_CLIPS = check5e.checked;
-            saveConfig();
-            log(`keep still clips set to ${check5e.checked}`);
-        });
-        row5e.appendChild(check5e);
-        configDiv.appendChild(row5e);
-
-        const row6 = document.createElement('div');
-        row6.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label6 = document.createElement('span');
-        label6.textContent = i18n('set_vcolor');
-        label6.title = i18n('set_vcolor_tip');
-        row6.appendChild(label6);
-        const check6 = document.createElement('input');
-        check6.type = 'checkbox';
-        check6.checked = !!CONFIG.VERTEX_COLOR_SRGB;
-        check6.addEventListener('change', () => {
-            CONFIG.VERTEX_COLOR_SRGB = check6.checked;
-            saveConfig();
-            log(`vertex color sRGB->linear set to ${check6.checked}`);
-        });
-        row6.appendChild(check6);
-        configDiv.appendChild(row6);
-
-        const row7 = document.createElement('div');
-        row7.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label7 = document.createElement('span');
-        label7.textContent = i18n('set_flat_mr');
-        label7.title = i18n('set_flat_mr_tip');
-        row7.appendChild(label7);
-        const check7 = document.createElement('input');
-        check7.type = 'checkbox';
-        check7.checked = !!CONFIG.FLAT_MR_FROM_VIEWER;
-        check7.addEventListener('change', () => {
-            CONFIG.FLAT_MR_FROM_VIEWER = check7.checked;
-            saveConfig();
-            log(`flat metal/rough from viewer set to ${check7.checked}`);
-        });
-        row7.appendChild(check7);
-        configDiv.appendChild(row7);
-
-        const row8 = document.createElement('div');
-        row8.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label8 = document.createElement('span');
-        label8.textContent = i18n('set_scale');
-        label8.title = i18n('set_scale_tip');
-        row8.appendChild(label8);
-        const input8 = document.createElement('input');
-        // text, not type=number: a number field rejects "0,01" in some browsers and languages
-        input8.type = 'text';
-        input8.inputMode = 'decimal';
-        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
-        const showNum = (v) => String(v).replace('.', decSep);
-        input8.value = showNum(CONFIG.EXPORT_SCALE);
-        input8.style.cssText = 'width:64px;background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        input8.addEventListener('change', () => {
-            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
-            if (isNaN(v) || v <= 0) v = 1;
-            input8.value = showNum(v);
-            CONFIG.EXPORT_SCALE = v;
-            saveConfig();
-            log(`export scale set to ${v}`);
-        });
-        row8.appendChild(input8);
-        configDiv.appendChild(row8);
-
-        const row3 = document.createElement('div');
-        row3.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label3 = document.createElement('span');
-        label3.textContent = i18n('set_mr_format');
-        label3.title = i18n('set_mr_format_tip');
-        row3.appendChild(label3);
-        const sel3 = document.createElement('select');
-        sel3.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.MR_TEXTURE_FORMAT === opt[0]) o.selected = true;
-            sel3.appendChild(o);
-        });
-        sel3.addEventListener('change', () => {
-            CONFIG.MR_TEXTURE_FORMAT = sel3.value;
-            saveConfig();
-        });
-        row3.appendChild(sel3);
-        configDiv.appendChild(row3);
-
-        const row4 = document.createElement('div');
-        row4.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
-        const label4 = document.createElement('span');
-        label4.textContent = i18n('set_rest');
-        label4.title = i18n('set_rest_tip');
-        row4.appendChild(label4);
-        const sel4 = document.createElement('select');
-        sel4.style.cssText = 'background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;';
-        [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]].forEach((opt) => {
-            const o = document.createElement('option');
-            o.value = opt[0];
-            o.textContent = opt[1];
-            if (CONFIG.REST_POSE_SOURCE === opt[0]) o.selected = true;
-            sel4.appendChild(o);
-        });
-        sel4.addEventListener('change', () => {
-            CONFIG.REST_POSE_SOURCE = sel4.value;
-            saveConfig();
-            log(`rest pose source set to ${sel4.value}`);
-        });
-        row4.appendChild(sel4);
-        configDiv.appendChild(row4);
-
-        panel.appendChild(configDiv);
-
-        // The settings need more room (longer labels in some languages): the panel gets wider while they are open.
-        gear.addEventListener('click', () => {
-            const open = configDiv.style.display === 'none';
-            configDiv.style.display = open ? 'flex' : 'none';
-            panel.classList.toggle('rp-wide', open);
-        });
-        if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
-        if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
-
-        document.body.appendChild(panel);
-        button_dw = true;
-        log(`panel added (language ${uiLang()})`);
-        if (rebuilt) return;   // the checks below run once per page
-
-        // Warn if the bad bundle was served. After 8s, show hint. After
-        // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
-        setTimeout(() => {
-            if (window._anyAnchorsMatched) return;
-            const s = document.getElementById('ripper-status');
-            if (s) {
-                s.textContent = i18n('st_no_anchors');
-                s.style.color = '#f80';
-            }
-            log('no anchors matched after 8s; bundle is the incompatible build');
-        }, 8000);
-
-        setTimeout(() => {
-            if (window._anyAnchorsMatched) return;
-            let already;
-            try { already = sessionStorage.getItem('ripper_reloaded'); } catch (e) { already = '1'; }
-            if (already) return;
-            if (!CONFIG.AUTO_RELOAD_ON_FAILURE) return;
-            try { sessionStorage.setItem('ripper_reloaded', '1'); if (sessionStorage.getItem('ripper_reloaded') !== '1') return; } catch (e) { return; }
-            log('no anchors after 12s, auto-reloading once');
-            location.reload();
-        }, 12000);
-
-        setInterval(() => {
-            const s = document.getElementById('ripper-status');
-            if (!s) return;
-            if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
-            const busy = window.animationRecording || window.clipRecording;
-            const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
-            s.textContent = i18n('st_line', { state, m: window.allmodel.length, f: window.recordedFrames.length, c: getClipCount() })
-                          + (window.clips.length ? i18n('st_rec_clips', { n: window.clips.length }) : '');
-            s.style.color = busy ? '#f28b82' : '#9aa0a6';
-        }, 500);
-
-        ((el, handle) => {
-            let ox = 0, oy = 0, drag = false;
-            handle.addEventListener('mousedown', (e) => {
-                drag = true; ox = e.clientX - el.offsetLeft; oy = e.clientY - el.offsetTop; e.preventDefault();
-            });
-            document.addEventListener('mousemove', (e) => {
-                if (!drag) return;
-                el.style.left = `${e.clientX - ox}px`;
-                el.style.top  = `${e.clientY - oy}px`;
-                el.style.right = 'auto';
-            });
-            document.addEventListener('mouseup', () => { drag = false; });
-        })(panel, title);
-    }
-
-    // ====================================================================
-    // parseobj
-    // ====================================================================
-    function parseobj(obj) {
-        const list = [];
-        (obj._primitives || []).forEach((p) => {
-            if (p && p.indices) list.push({ mode: p.mode, indices: p.indices._elements });
-        });
-        const attr = obj._attributes || {};
-        let joints  = attr.Joints0  || attr.JOINTS_0 || attr.joints0 || attr.Joints  || attr.JOINTS  || attr.Bones || attr.BONES;
-        let weights = attr.Weights0 || attr.WEIGHTS_0 || attr.weights0 || attr.Weights || attr.WEIGHTS || attr.BoneWeights || attr.BONEWEIGHTS;
-        if (joints)  joints  = joints._elements;
-        if (weights) weights = weights._elements;
-        // Sketchfab assigns arbitrary TexCoordN indices per mesh
-        // (e.g. TexCoord0, TexCoord3, TexCoord6 on the same model),
-        // so scan for any TexCoordN key rather than hard-coding.
-        let uvAttr = null;
-        let _uvBestNum = Infinity;
-        for (let _k in attr) {
-            if (!attr.hasOwnProperty(_k)) continue;
-            const _m = /^TexCoord(\d+)$/.exec(_k);
-            if (!_m) continue;
-            const _a = attr[_k];
-            if (!_a || !_a._elements || !_a._elements.length) continue;
-            const _n = parseInt(_m[1], 10);
-            if (_n < _uvBestNum) {
-                _uvBestNum = _n;
-                uvAttr = _a;
-            }
-        }
-
-        return {
-            vertex: attr.Vertex ? attr.Vertex._elements : [],
-            normal: attr.Normal ? attr.Normal._elements : [],
-            uv: uvAttr ? uvAttr._elements : [],
-            color: (attr.Color && attr.Color._elements) ? attr.Color._elements : [],
-            joints,
-            weights,
-            primitives: list
-        };
-    }
 
     // ====================================================================
     // MetallicRoughness merge
@@ -2946,31 +2290,21 @@
 
         if (!metalBlob && !roughBlob && !glossBlob) return Promise.resolve(null);
 
-        const pending = [];
-        if (metalBlob) pending.push(createImageBitmap(metalBlob));
-        if (roughBlob) pending.push(createImageBitmap(roughBlob));
-        if (glossBlob) pending.push(createImageBitmap(glossBlob));
+        // One image that does not decode must not lose the others: it is treated as absent.
+        const decode = (blob, what) => (blob ? createImageBitmap(blob).catch((e) => {
+            warn(`MR merge: ${what} image could not be decoded (${e && e.message}), merged without it`);
+            return null;
+        }) : null);
 
-        return Promise.all(pending).then((bmps) => {
-            let i = 0;
-            const mBmp = metalBlob ? bmps[i++] : null;
-            const rBmp = roughBlob ? bmps[i++] : null;
-            const gBmp = glossBlob ? bmps[i++] : null;
+        return Promise.all([decode(metalBlob, 'metalness'), decode(roughBlob, 'roughness'), decode(glossBlob, 'glossiness')]).then((bmps) => {
+            const mBmp = bmps[0], rBmp = bmps[1], gBmp = bmps[2];
             const ref = mBmp || rBmp || gBmp;
+            if (!ref) return null;
             const W = ref.width, H = ref.height;
 
-            function readGray(bmp) {
-                const c = document.createElement('canvas');
-                c.width = W; c.height = H;
-                const x = c.getContext('2d');
-                x.drawImage(bmp, 0, 0, W, H);
-                const px = x.getImageData(0, 0, W, H).data;
-                c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
-                return px;
-            }
-            const mData = mBmp ? readGray(mBmp) : null;
-            const rData = rBmp ? readGray(rBmp) : null;
-            const gData = gBmp ? readGray(gBmp) : null;
+            const mData = mBmp ? bitmapPixels(mBmp, W, H) : null;
+            const rData = rBmp ? bitmapPixels(rBmp, W, H) : null;
+            const gData = gBmp ? bitmapPixels(gBmp, W, H) : null;
 
             const out = new Uint8ClampedArray(W * H * 4);
             for (let p = 0; p < W * H; p++) {
@@ -3005,13 +2339,10 @@
         const tick = () => { done++; if (onJob) onJob(done, jobs.length); };
         const seen = {};
         window.allmodel.forEach((obj, i) => {
-            const ss = obj.stateset;
-            const meshName = obj._name
-                         || (ss && ss._name)
-                         || (`mesh_${i}`);
+            const mName = meshName(obj, i);
             const cm = getChannelTextureMap(obj);
             if (!cm.MetalnessPBR && !cm.RoughnessPBR && !cm.GlossinessPBR) return;
-            const san = sanitizeTextureName(meshName);
+            const san = sanitizeTextureName(mName);
             if (seen[san]) return;
             seen[san] = true;
             jobs.push(
@@ -3026,9 +2357,9 @@
                         hasM: result.hasM,
                         hasR: result.hasR
                     };
-                    log('merged MR:', meshName, '→', fname, `${result.blob.size}B`);
+                    log('merged MR:', mName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
-                    warn('MR merge failed for', meshName, e.message);
+                    warn('MR merge failed for', mName, e.message);
                 }).then(tick)
             );
         });
@@ -3088,16 +2419,8 @@
         return Promise.all([noColor ? null : createImageBitmap(colorBlob), createImageBitmap(maskBlob)]).then((bmps) => {
             const mBmp = bmps[1], cBmp = bmps[0] || mBmp;
             const W = cBmp.width, H = cBmp.height;
-            function readPixels(bmp) {
-                const c = document.createElement('canvas');
-                c.width = W; c.height = H;
-                const x = c.getContext('2d');
-                x.drawImage(bmp, 0, 0, W, H);   // the mask is scaled to the color size
-                const px = x.getImageData(0, 0, W, H).data;
-                c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
-                return px;
-            }
-            const cData = noColor ? null : readPixels(cBmp), mData = readPixels(mBmp);
+            // the mask is scaled to the color size
+            const cData = noColor ? null : bitmapPixels(cBmp, W, H), mData = bitmapPixels(mBmp, W, H);
             const out = new Uint8ClampedArray(W * H * 4);
             for (let p = 0; p < W * H; p++) {
                 const q = p * 4;
@@ -3133,8 +2456,7 @@
         const jobs = [];
         const seen = {};
         window.allmodel.forEach((obj, i) => {
-            const ss = obj.stateset;
-            const meshName = obj._name || (ss && ss._name) || (`mesh_${i}`);
+            const mName = meshName(obj, i);
             const cm = getChannelTextureMap(obj);
             const opSrc = opacitySource(cm);
             if (!opSrc || !(opSrc.url || opSrc.name) || opSrc.atlas) return;
@@ -3142,7 +2464,7 @@
             const isOpacity = opSrc === cm.Opacity;
             const opCh = mch && (isOpacity ? mch.Opacity : mch.AlphaMask);
             if (opCh && opCh.enable === false) return;   // texture present but the channel is switched off in the viewer
-            const san = sanitizeTextureName(meshName);
+            const san = sanitizeTextureName(mName);
             if (seen[san]) return;
             seen[san] = true;
             // Opacity channel of a cutout type behaves like a mask (MASK), blend types use BLEND.
@@ -3152,12 +2474,12 @@
                 _opacityNoColor[san] = true;   // opacity image only: merge into a white RGB + alpha texture
             } else if (normalizeUrl(opSrc.url) === normalizeUrl(cm.AlbedoPBR.url)) {
                 _opacityOneFile[san] = true;
-                log(`opacity merge: ${meshName} uses one file for color and opacity, skipped`);
+                log(`opacity merge: ${mName} uses one file for color and opacity, skipped`);
                 return;
             }
             // Meshes sharing the same colour and mask images share one merged texture.
             const okey = `${_opacityNoColor[san] ? 'white' : normalizeUrl(cm.AlbedoPBR.url)}|${normalizeUrl(opSrc.url)}`;
-            if (_alphaFirst[okey]) { _alphaShare[san] = _alphaFirst[okey]; log(`opacity merge: ${meshName} shares the merged texture of ${_alphaFirst[okey]}`); return; }
+            if (_alphaFirst[okey]) { _alphaShare[san] = _alphaFirst[okey]; log(`opacity merge: ${mName} shares the merged texture of ${_alphaFirst[okey]}`); return; }
             _alphaFirst[okey] = san;
             jobs.push(
                 _mergeOneOpacity(cm).then((result) => {
@@ -3169,9 +2491,9 @@
                         fileExt: result.ext,
                         dataURL: 'merged'
                     };
-                    log('merged opacity:', meshName, '→', fname, `${result.blob.size}B`);
+                    log('merged opacity:', mName, '→', fname, `${result.blob.size}B`);
                 }).catch((e) => {
-                    warn('opacity merge failed for', meshName, e.message);
+                    warn('opacity merge failed for', mName, e.message);
                 }).then(tick)
             );
         });
@@ -3242,137 +2564,680 @@
     }
 
     // ====================================================================
-    // GLB Export
+    // glTF builder
     // ====================================================================
-    // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
-    function downloadGLB(format) {
-        format = format === 'fbx' ? 'fbx' : 'glb';
-        if (_exporting) { warn('export already running, ignored'); return; }
-        if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
-        _exporting = true;
-        log(`export started (${format.toUpperCase()})`);
-        const stages = format === 'fbx'
-            ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
-            : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
-        const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
-        stage(0);
-        waitForTextures((got, total, left) => {
-            if (!total) progSub(1, i18n('pr_no_textures'));
-            else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
-            else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
-        })
-            .then(() => {
-                stage(1);
-                // two parts: metal/rough maps, then opacity into base colour alpha
-                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? i18n('pr_mr', { d, n }) : i18n('pr_no_mr')), format === 'fbx');
-            })
-            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? i18n('pr_op', { d, n }) : i18n('pr_no_op'))))
-            .then(() => { stage(2); progSub(-1, i18n('pr_building')); return nextPaint(); })
-            .then(() => {
-                const built = _downloadGLBSync();
-                if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
-                return exportFBX(built, stage);
-            })
-            .then(() => { _exporting = false; progDone(i18n('pr_done')); })
-            .catch((e) => {
-                _exporting = false;
-                progDone(i18n('pr_export_failed'), true);
-                err('export failed:', e.message, e.stack);
-            });
-    }
-
-    function nextPaint() { return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); }
-
-    // Zips the model file(s) with the captured textures. extra: { path: Blob }.
-    function packZip(built, files, stage, stageIdx) {
-        stage(stageIdx);
-        const zip = new JSZip();
-        Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
-        for (const tn in built.zipTex) {
-            if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
-                if (built.skipTex && built.skipTex[`textures/${built.zipTex[tn]}`]) continue;
-                zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
+    function parseobj(obj) {
+        const list = [];
+        (obj._primitives || []).forEach((p) => {
+            if (p && p.indices) list.push({ mode: p.mode, indices: p.indices._elements });
+        });
+        const attr = obj._attributes || {};
+        let joints  = attr.Joints0  || attr.JOINTS_0 || attr.joints0 || attr.Joints  || attr.JOINTS  || attr.Bones || attr.BONES;
+        let weights = attr.Weights0 || attr.WEIGHTS_0 || attr.weights0 || attr.Weights || attr.WEIGHTS || attr.BoneWeights || attr.BONEWEIGHTS;
+        if (joints)  joints  = joints._elements;
+        if (weights) weights = weights._elements;
+        // Sketchfab assigns arbitrary TexCoordN indices per mesh
+        // (e.g. TexCoord0, TexCoord3, TexCoord6 on the same model),
+        // so scan for any TexCoordN key rather than hard-coding.
+        let uvAttr = null;
+        let _uvBestNum = Infinity;
+        for (let _k in attr) {
+            if (!attr.hasOwnProperty(_k)) continue;
+            const _m = /^TexCoord(\d+)$/.exec(_k);
+            if (!_m) continue;
+            const _a = attr[_k];
+            if (!_a || !_a._elements || !_a._elements.length) continue;
+            const _n = parseInt(_m[1], 10);
+            if (_n < _uvBestNum) {
+                _uvBestNum = _n;
+                uvAttr = _a;
             }
         }
-        (built.extraTex || []).forEach((t) => zip.file(t.path, t.blob, { compression: 'STORE' }));
-        return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
-            (meta) => progSub(meta.percent / 100, `${Math.round(meta.percent)}%`)).then((content) => {
-            saveAs(content, `${built.modelName}.zip`);
-            log('export done:', `${built.modelName}.zip`);
-        }).catch((e) => { throw new Error('zip failed: ' + e.message); });
+
+        return {
+            vertex: attr.Vertex ? attr.Vertex._elements : [],
+            normal: attr.Normal ? attr.Normal._elements : [],
+            uv: uvAttr ? uvAttr._elements : [],
+            color: (attr.Color && attr.Color._elements) ? attr.Color._elements : [],
+            joints,
+            weights,
+            primitives: list
+        };
     }
 
-    // zlib deflate for compressed FBX arrays (CompressionStream 'deflate' = zlib format)
-    function zlibDeflate(u8) {
-        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
-        const cs = new CompressionStream('deflate');
-        const out = new Response(cs.readable).arrayBuffer().then((b) => new Uint8Array(b));
-        const w = cs.writable.getWriter(); w.write(u8); w.close();
-        return out;
+    function unitNormals(a) {
+        let o = new Float32Array(a.length), i, x, y, z, l;
+        for (i = 0; i + 2 < a.length; i += 3) {
+            x = a[i]; y = a[i + 1]; z = a[i + 2];
+            l = Math.sqrt(x * x + y * y + z * z);
+            if (l > 1e-12) { o[i] = x / l; o[i + 1] = y / l; o[i + 2] = z / l; }
+            else { o[i] = 0; o[i + 1] = 1; o[i + 2] = 0; }
+        }
+        return o;
     }
 
-    // One channel of an image as a grayscale PNG (FBX has no packed metal/rough map).
-    function splitChannel(blob, channel) {
-        return createImageBitmap(blob).then((bmp) => {
-            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
-            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
-            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data, k = { R: 0, G: 1, B: 2 }[channel];
-            for (let i = 0; i < d.length; i += 4) { const v = d[i + k]; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
-            cx.putImageData(id, 0, 0);
-            return new Promise((res) => c.toBlob(res, 'image/png'));
+    // The viewer can hold a second copy of a mesh that only has LINES (its wireframe display).
+    // It has the same vertices as the real mesh but no triangles. Returns the index of the real
+    // mesh when obj is such an overlay, otherwise -1. A line mesh with no twin is real and is kept.
+    function wireOverlayTwin(list, idx) {
+        let obj = list[idx], prims = obj && obj._primitives, i, p, hasLines = false, key;
+        if (!prims || !prims.length) return -1;
+        for (i = 0; i < prims.length; i++) {
+            p = prims[i];
+            if (!p || !p.indices) continue;
+            if (p.mode === 1 || p.mode === 2 || p.mode === 3) hasLines = true;
+            else return -1;   // has a triangle (or point) primitive: not an overlay
+        }
+        if (!hasLines) return -1;
+        key = geomKey(obj, true);
+        if (!key) return -1;
+        for (i = 0; i < list.length; i++) {
+            let o2 = list[i], pr2 = o2 && o2._primitives, j, tri = false;
+            if (i === idx || !pr2 || geomKey(o2, true) !== key) continue;
+            for (j = 0; j < pr2.length; j++) {
+                const m2 = pr2[j] && pr2[j].mode;
+                if (pr2[j] && pr2[j].indices && (m2 === undefined || m2 === null || m2 === 4 || m2 === 5 || m2 === 6)) tri = true;
+            }
+            if (tri) return i;
+        }
+        return -1;
+    }
+
+    // Keyframe reduction. Keeps the first and last key, and every key that is needed so that
+    // interpolation between the kept keys stays within tol of each recorded sample (per component).
+    // Rotations (isQuat) are checked with slerp, as glTF interpolates them. A segment spans at most
+    // maxSpan recorded frames, which limits the run time. Returns the indices of the kept keys.
+    function reduceKeys(times, vals, n, tol, isQuat, maxSpan) {
+        let nk = times.length, keep = [0], i = 0, j, k, c, ok, best, tmp = [0, 0, 0, 0];
+        if (nk < 3) { for (k = 1; k < nk; k++) keep.push(k); return keep; }
+        function interp(a, b, u) {
+            const ia = a * n, ib = b * n;
+            if (isQuat && n === 4) {
+                let dt = vals[ia] * vals[ib] + vals[ia + 1] * vals[ib + 1] + vals[ia + 2] * vals[ib + 2] + vals[ia + 3] * vals[ib + 3];
+                let sg = dt < 0 ? -1 : 1, w0, w1;
+                dt = Math.abs(dt);
+                if (dt > 0.9995) { w0 = 1 - u; w1 = u; }
+                else {
+                    const th = Math.acos(Math.min(1, dt)), sn = Math.sin(th);
+                    w0 = Math.sin((1 - u) * th) / sn; w1 = Math.sin(u * th) / sn;
+                }
+                let len = 0;
+                for (c = 0; c < 4; c++) { tmp[c] = w0 * vals[ia + c] + sg * w1 * vals[ib + c]; len += tmp[c] * tmp[c]; }
+                len = Math.sqrt(len) || 1;
+                for (c = 0; c < 4; c++) tmp[c] /= len;
+            } else {
+                for (c = 0; c < n; c++) tmp[c] = vals[ia + c] + (vals[ib + c] - vals[ia + c]) * u;
+            }
+        }
+        while (i < nk - 1) {
+            best = i + 1;
+            for (j = i + 2; j < nk && j - i <= maxSpan; j++) {
+                ok = true;
+                const span = times[j] - times[i];
+                for (k = i + 1; k < j && ok; k++) {
+                    interp(i, j, span > 0 ? (times[k] - times[i]) / span : 0);
+                    for (c = 0; c < n; c++) if (Math.abs(tmp[c] - vals[k * n + c]) > tol) { ok = false; break; }
+                }
+                if (!ok) break;
+                best = j;
+            }
+            keep.push(best);
+            i = best;
+        }
+        return keep;
+    }
+
+    // Remove nodes (the skipped wireframe overlay) and renumber every reference to a node.
+    // Changes the list in place and returns the new index of the scene root.
+    function removeNodes(nodes, skins, animations, drop, rootIdx) {
+        let remap = [], kept = [], i;
+        for (i = 0; i < nodes.length; i++) {
+            if (drop[i]) remap.push(-1);
+            else { remap.push(kept.length); kept.push(nodes[i]); }
+        }
+        kept.forEach((n) => {
+            if (!n.children) return;
+            const c2 = [];
+            n.children.forEach((c) => { if (remap[c] >= 0) c2.push(remap[c]); });
+            n.children = c2;
         });
-    }
-
-    // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
-    function fbxLabel(label) {
-        const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
-        if (!m) return label;
-        const key = 'fbx_' + m[1].replace(/ /g, '_') + (m[2] ? '_n' : '');
-        return (STRINGS.en[key] !== undefined) ? i18n(key, { i: m[2], n: m[3] }) : label;
-    }
-
-    function exportFBX(built, stage) {
-        stage(3);
-        const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
-        return FbxWriter.gltfToFbx(built.gltf, built.bin, {
-            creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
-            fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
-            deflate: zlibDeflate,
-            onProgress: (f, label) => progSub(f, fbxLabel(label)),
-        }).then((res) => {
-            res.warnings.forEach((w) => warn('fbx: ' + w));
-            const st = res.stats;
-            log(`fbx written: ${(res.fbx.byteLength / 1048576).toFixed(1)} MB, models=${st.models} geometries=${st.geometries} materials=${st.materials} textures=${st.textures} clusters=${st.clusters} clips=${st.stacks} curves=${st.curves}`);
-            stage(4);
-            const byUri = {};
-            for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
-            built.extraTex = [];
-            built.skipTex = {};
-            let n = 0;
-            return res.splits.reduce((p, sp) => p.then(() => {
-                progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
-                const src = byUri[sp.src];
-                if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
-                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
-                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
-            }), Promise.resolve()).then(() => {
-                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
-                return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
+        skins.forEach((sk) => {
+            sk.joints = sk.joints.map((j) => remap[j]);
+            if (typeof sk.skeleton === 'number') sk.skeleton = remap[sk.skeleton];
+        });
+        (animations || []).forEach((a) => {
+            a.channels.forEach((c) => {
+                if (c.target && typeof c.target.node === 'number') c.target.node = remap[c.target.node];
             });
         });
+        nodes.length = 0;
+        kept.forEach((n) => { nodes.push(n); });
+        return remap[rootIdx];
     }
 
-    function _downloadGLBSync() {
-        try {
-            function pad(o) { return o % 4 ? o + (4 - o % 4) : o; }
+    function pad4(o) { return o % 4 ? o + (4 - o % 4) : o; }
 
+    // Display name of a captured mesh: its own name, its stateset name, or mesh_<index>.
+    function meshName(obj, i) { return obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${i}`); }
+
+    // Model name from the viewer page, or 'model'.
+    function modelBaseName() {
+        const ml = document.getElementsByClassName('model-name__label')[0];
+        return ml ? ml.textContent.trim().replace(/\.+$/, '') : 'model';
+    }
+
+    // RGBA pixels of a bitmap drawn at W x H (scaled). Frees the bitmap and the canvas.
+    function bitmapPixels(bmp, W, H) {
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        x.drawImage(bmp, 0, 0, W, H);
+        const px = x.getImageData(0, 0, W, H).data;
+        c.width = 0; if (bmp.close) bmp.close();   // release the bitmap and canvas memory early
+        return px;
+    }
+
+    // Vertex colors (Sketchfab "Color" attribute). Uint8 RGBA is written as a
+    // normalized UNSIGNED_BYTE VEC4; float RGBA as FLOAT VEC4; RGB is widened
+    // to float VEC3 (3-byte ubyte elements are not 4-byte aligned in glTF).
+    // Returns the COLOR_0 accessor (its data already added with addBV), or null.
+    function vertexColorAccessor(colArr, vc, nm, addBV) {
+        let acc = null;
+        if (colArr && colArr.length) {
+            const isU8 = (colArr instanceof Uint8Array || colArr instanceof Uint8ClampedArray);
+            const conv = !!CONFIG.VERTEX_COLOR_SRGB;
+            const cStride = (colArr.length === vc * 4) ? 4 : ((colArr.length === vc * 3) ? 3 : 0);
+            if (cStride && !conv && cStride === 4) {
+                if (isU8) {
+                    acc = { bufferView: addBV(new Uint8Array(colArr), 34962), componentType: 5121,
+                            normalized: true, count: vc, type: 'VEC4' };
+                } else {
+                    acc = { bufferView: addBV(new Float32Array(colArr), 34962), componentType: 5126,
+                            count: vc, type: 'VEC4' };
+                }
+                log('vertex colors:', nm, isU8 ? '(RGBA8)' : '(RGBA float)');
+            } else if (cStride) {
+                // Float output (RGB widened since 3-byte ubyte elements are not 4-byte
+                // aligned). With VERTEX_COLOR_SRGB the RGB channels go sRGB -> linear.
+                const cf = new Float32Array(colArr.length);
+                for (let cfi = 0; cfi < cf.length; cfi++) {
+                    let cv = isU8 ? colArr[cfi] / 255 : colArr[cfi];
+                    if (conv && (cStride === 3 || cfi % 4 !== 3)) {
+                        cv = (cv <= 0.04045) ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+                    }
+                    cf[cfi] = cv;
+                }
+                acc = { bufferView: addBV(cf, 34962), componentType: 5126, count: vc, type: cStride === 4 ? 'VEC4' : 'VEC3' };
+                log('vertex colors:', nm, cStride === 4 ? '(RGBA)' : '(RGB)', conv ? 'sRGB->linear' : 'as is');
+            } else {
+                warn('vertex colors: unexpected length', colArr.length, 'for', vc, 'vertices on', nm, ', skipped');
+            }
+        }
+        return acc;
+    }
+
+    // One index primitive (mode 4 list, 5 strip, 6 fan) as a TRIANGLES index list. Drops degenerate
+    // triangles (strip joins) and restart / out-of-range indices; with DROP_STRIP_SLIVERS also the
+    // bridging sliver triangles of strips (logged). Returns null for points and lines.
+    function primitiveTriangles(pm, pi2, vertex, vc, nm) {
+        let tl = [], t2;
+        // Degenerate triangles (repeated index) are strip joins; drop them so
+        // Blender does not show long zero-area edges between distant vertices.
+        let oobN = 0, degN = 0, tpos = [];
+        function addTri(a, b, c) {
+            if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) { tl.push(a, b, c); tpos.push(t2); }
+            else if (a >= vc || b >= vc || c >= vc) oobN++;
+            else degN++;
+        }
+        // An index >= vertex count (WebGL2 primitive restart value 65535 / 4294967295) ends a
+        // strip or fan: restart the winding parity after it instead of treating it as a vertex.
+        let rs = 0;
+        if (pm === 4) {
+            for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) addTri(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]);
+        } else if (pm === 5) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
+                if (t2 - rs < 2) continue;
+                if ((t2 - rs) % 2 === 0) addTri(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
+                else addTri(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
+            }
+        } else if (pm === 6) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
+                if (t2 - rs < 2) continue;
+                addTri(pi2[rs], pi2[t2 - 1], pi2[t2]);
+            }
+        } else return null;   // points or lines
+        // Diagnostic for stray long thin triangles ("stripes"): flag triangles whose longest edge is
+        // far above the typical edge of this mesh and print where they come from in the index list.
+        if (tl.length) (() => {
+            let vv = vertex, nT = tl.length / 3, q, lens = [], mn = [1e30, 1e30, 1e30], mx = [-1e30, -1e30, -1e30];
+            function el(i, j) { const dx = vv[i * 3] - vv[j * 3], dy = vv[i * 3 + 1] - vv[j * 3 + 1], dz = vv[i * 3 + 2] - vv[j * 3 + 2]; return Math.sqrt(dx * dx + dy * dy + dz * dz); }
+            for (q = 0; q < vc; q++) for (let ax = 0; ax < 3; ax++) { const cv = vv[q * 3 + ax]; if (cv < mn[ax]) mn[ax] = cv; if (cv > mx[ax]) mx[ax] = cv; }
+            const size = Math.sqrt(Math.pow(mx[0] - mn[0], 2) + Math.pow(mx[1] - mn[1], 2) + Math.pow(mx[2] - mn[2], 2));
+            const step = Math.max(1, Math.floor(nT / 2000));
+            for (q = 0; q < nT; q += step) lens.push(Math.max(el(tl[q * 3], tl[q * 3 + 1]), el(tl[q * 3 + 1], tl[q * 3 + 2]), el(tl[q * 3], tl[q * 3 + 2])));
+            lens.sort((a, b) => a - b);
+            let med = lens[lens.length >> 1] || 0, lim = Math.max(20 * med, 0.05 * size), hits = 0, shown = 0, drop = {}, nDrop = 0, cand = [];
+            for (q = 0; q < nT; q++) {
+                const a0 = tl[q * 3], b0 = tl[q * 3 + 1], c0 = tl[q * 3 + 2];
+                const L = Math.max(el(a0, b0), el(b0, c0), el(a0, c0));
+                if (!(L > lim)) continue;
+                hits++;
+                // Bridging triangle of a strip join without repeated vertices: very long and almost no width.
+                const ux = vv[b0 * 3] - vv[a0 * 3], uy = vv[b0 * 3 + 1] - vv[a0 * 3 + 1], uz = vv[b0 * 3 + 2] - vv[a0 * 3 + 2];
+                const wx = vv[c0 * 3] - vv[a0 * 3], wy = vv[c0 * 3 + 1] - vv[a0 * 3 + 1], wz = vv[c0 * 3 + 2] - vv[a0 * 3 + 2];
+                const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
+                const height = Math.sqrt(cx * cx + cy * cy + cz * cz) / L;   // 2*area / longest edge
+                if (CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) cand.push(q);
+                if (shown < 3 && CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) {
+                    shown++;
+                    const at = tpos[q], ctx = [];
+                    for (let ci = Math.max(0, at - 5); ci <= Math.min(pi2.length - 1, at + 3); ci++) ctx.push((ci === at ? '*' : '') + pi2[ci]);
+                    log('long triangle:', nm, `mode ${pm}`, 'tri (' + a0 + ',' + b0 + ',' + c0 + ') longest edge ' + L.toFixed(3) +
+                        ' (typical ' + med.toFixed(4) + ', mesh size ' + size.toFixed(3) + ') at index ' + at + ' of ' + pi2.length + ', indices around: ' + ctx.join(' '));
+                }
+            }
+            // A bridging triangle spans a gap: one of its long edges is used by no other triangle
+            // (vertices welded by position). Long thin tubes/rods share every long edge, so they stay.
+            if (cand.length) {
+                let qs = Math.max(size * 1e-6, 1e-9), wmap = {}, wid = new Int32Array(vc), nw = 0, vi;
+                for (vi = 0; vi < vc; vi++) {
+                    const wk = `${Math.round(vv[vi * 3] / qs)},${Math.round(vv[vi * 3 + 1] / qs)},${Math.round(vv[vi * 3 + 2] / qs)}`;
+                    if (wmap[wk] === undefined) wmap[wk] = nw++;
+                    wid[vi] = wmap[wk];
+                }
+                const ek = (i, j) => { const a1 = wid[i], b1 = wid[j]; return a1 < b1 ? `${a1}_${b1}` : `${b1}_${a1}`; };
+                let ecount = {}, ci2, e3;
+                for (ci2 = 0; ci2 < cand.length; ci2++) {
+                    const cq = cand[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
+                    for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > lim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
+                }
+                for (q = 0; q < nT; q++) for (e3 = 0; e3 < 3; e3++) {
+                    const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
+                    if (ecount[k3] !== undefined) ecount[k3]++;
+                }
+                // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
+                // grass, hair strip) does not, so it stays.
+                const isCand = {}, onReal = new Uint8Array(nw);
+                for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
+                for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
+                for (ci2 = 0; ci2 < cand.length; ci2++) {
+                    let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
+                    for (e3 = 0; e3 < 3; e3++) {
+                        const ka = ek(cw[e3], cw[(e3 + 1) % 3]);
+                        if (ecount[ka] === 1 && onReal[wid[cw[e3]]] && onReal[wid[cw[(e3 + 1) % 3]]]) open = true;
+                    }
+                    if (open) { drop[cq2] = true; nDrop++; }
+                }
+            }
+            if (nDrop) {
+                const kept = [];
+                for (q = 0; q < nT; q++) if (!drop[q]) kept.push(tl[q * 3], tl[q * 3 + 1], tl[q * 3 + 2]);
+                tl = kept;
+                log(`mesh ${nm}: dropped ${nDrop} bridging sliver triangle(s) from the strip (stripes)`);
+            }
+            if (hits > nDrop) log(`mesh ${nm}: ${hits - nDrop} long thin triangle(s) kept (real geometry, edges shared)`);
+        })();
+        if (oobN) log('indices:', nm, `mode ${pm}`, `${pi2.length} indices ->`, `${tl.length / 3} triangles, restart/out-of-range ${oobN}, degenerate ${degN}, vertices ${vc}`);
+        return tl;
+    }
+
+    // Morph target accessors of one mesh (POSITION and NORMAL deltas). The viewer blends
+    // (1 - sum w) * base + sum w_k * target_k with absolute targets, which equals glTF's
+    // base + sum w_k * (target_k - base).
+    function morphTargetAccessors(obj, mdl, vc, nm, accs, addBV) {
+        const morphTargets = [], mAttr = obj._attributes || {};
+        function morphEls(a) {
+            const b = a && (a._initialBufferArray || a._bufferArray);
+            return (b && b._elements) || (a && a._elements) || null;
+        }
+        for (let mk = 0, mN = morphTargetCount(obj); mk < mN; mk++) {
+            const tv = morphEls(mAttr[`Vertex_${mk}`]);
+            if (!tv || tv.length !== mdl.vertex.length) {
+                warn('morph target', mk, 'of', nm, 'skipped (vertex data missing or wrong size)');
+                continue;
+            }
+            const dv = new Float32Array(tv.length), dMin = [Infinity, Infinity, Infinity], dMax = [-Infinity, -Infinity, -Infinity];
+            for (let di = 0; di < tv.length; di++) {
+                const dd = tv[di] - mdl.vertex[di];
+                dv[di] = dd;
+                const dax = di % 3;
+                if (dd < dMin[dax]) dMin[dax] = dd;
+                if (dd > dMax[dax]) dMax[dax] = dd;
+            }
+            const tgt = { POSITION: accs.length };
+            accs.push({ bufferView: addBV(dv, 34962), componentType: 5126, count: vc,
+                        type: 'VEC3', min: dMin, max: dMax });
+            let tn = morphEls(mAttr[`Normal_${mk}`]);
+            if (tn && mdl.normal.length && tn.length === mdl.normal.length) {
+                tn = unitNormals(tn);
+                const dn = new Float32Array(tn.length);
+                for (let dni = 0; dni < tn.length; dni++) dn[dni] = tn[dni] - mdl.normal[dni];
+                tgt.NORMAL = accs.length;
+                accs.push({ bufferView: addBV(dn, 34962), componentType: 5126, count: vc, type: 'VEC3' });
+            }
+            morphTargets.push(tgt);
+        }
+        return morphTargets;
+    }
+
+    // Every captured texture with a file, under an ASCII-safe unique name, indexed by URL and by name.
+    function buildTexturePool() {
+        let images = [], textures = [], imageKeys = [], usedSafe = {};
+        const textureUrlToIndex  = {};
+        const textureNameToIndex = {};
+        for (let key in saveimagecache2) {
+            if (!saveimagecache2.hasOwnProperty(key)) continue;
+            const t = saveimagecache2[key];
+            if (!t || !t.dataURL) continue;
+            const ext = t.fileExt || '.png';
+            if (!objects[(t.name || 'texture') + ext]) { warn(`texture file missing, not referenced: ${t.name || 'texture'}${ext}`); continue; }
+            // ASCII-safe file name: no encoding issues in URIs or zip loaders.
+            const safeBase = String(t.name || 'texture').replace(/[^A-Za-z0-9._-]+/g, '_') || 'texture';
+            let safeName = safeBase + ext, sc = 1;
+            while (usedSafe[safeName.toLowerCase()]) safeName = `${safeBase}_${sc++}${ext}`;   // case-insensitive file systems
+            usedSafe[safeName.toLowerCase()] = true;
+            const path = `textures/${safeName}`;
+            const ii = images.length;
+            imageKeys.push({ key: (t.name || 'texture') + ext, safe: safeName });
+            images.push({ uri: path });
+            textures.push({ source: ii });
+            const nu = normalizeUrl(key);
+            if (nu) textureUrlToIndex[nu] = ii;
+            const sn = sanitizeTextureName(t.name);
+            if (sn) textureNameToIndex[sn] = ii;
+        }
+        return { images, textures, imageKeys, textureUrlToIndex, textureNameToIndex };
+    }
+
+    // Keeps only the textures some material uses and renumbers the material references.
+    // zipTex: captured file name -> file name in the zip.
+    function pruneUnusedTextures(mats, images, textures, imageKeys) {
+        // Drop textures no material references (captured env/matcap/leftover images) and remap indices.
+        const texUsed = {}, texNew = {}, keptImages = [], keptTextures = [], zipTex = {};
+        function markTex(o) { if (o && typeof o.index === 'number') texUsed[o.index] = true; }
+        mats.forEach((m) => {
+            const pb = m.pbrMetallicRoughness || {};
+            markTex(pb.baseColorTexture); markTex(pb.metallicRoughnessTexture);
+            markTex(m.normalTexture); markTex(m.occlusionTexture); markTex(m.emissiveTexture);
+        });
+        for (let ti2 = 0; ti2 < textures.length; ti2++) {
+            if (!texUsed[ti2]) continue;
+            texNew[ti2] = keptTextures.length;
+            keptImages.push({ uri: images[textures[ti2].source].uri });
+            keptTextures.push({ source: keptImages.length - 1 });
+            zipTex[imageKeys[textures[ti2].source].key] = imageKeys[textures[ti2].source].safe;
+        }
+        function remapTex(o) { if (o && typeof o.index === 'number') o.index = texNew[o.index]; }
+        mats.forEach((m) => {
+            const pb = m.pbrMetallicRoughness || {};
+            remapTex(pb.baseColorTexture); remapTex(pb.metallicRoughnessTexture);
+            remapTex(m.normalTexture); remapTex(m.occlusionTexture); remapTex(m.emissiveTexture);
+        });
+        if (keptTextures.length !== textures.length) log(`textures: ${keptTextures.length} used, ${textures.length - keptTextures.length} unused dropped`);
+        return { images: keptImages, textures: keptTextures, zipTex };
+    }
+
+    // GLB container: 12-byte header, JSON chunk (space padded), BIN chunk (zero padded).
+    function packGlb(gltf, binAll) {
+        const jsonStr = JSON.stringify(gltf);
+        const jsonBytes = new TextEncoder().encode(jsonStr);
+        const jAl = pad4(jsonBytes.byteLength), jPad = jAl - jsonBytes.byteLength;
+        const bin = binAll.buffer;
+        const bAl = pad4(bin.byteLength), bPad = bAl - bin.byteLength;
+        const total = 12 + 8 + jAl + 8 + bAl;
+
+        const glb = new ArrayBuffer(total);
+        let dv = new DataView(glb), o = 0;
+        dv.setUint32(o, 0x46546C67, true); o += 4;
+        dv.setUint32(o, 2, true); o += 4;
+        dv.setUint32(o, total, true); o += 4;
+        dv.setUint32(o, jAl, true); o += 4;
+        dv.setUint32(o, 0x4E4F534A, true); o += 4;
+        new Uint8Array(glb, o, jsonBytes.length).set(jsonBytes); o += jsonBytes.length;
+        for (let k1 = 0; k1 < jPad; k1++) new Uint8Array(glb, o + k1, 1)[0] = 0x20;
+        o += jPad;
+        dv.setUint32(o, bAl, true); o += 4;
+        dv.setUint32(o, 0x004E4942, true); o += 4;
+        new Uint8Array(glb, o, bin.byteLength).set(new Uint8Array(bin)); o += bin.byteLength;
+        for (let k2 = 0; k2 < bPad; k2++) new Uint8Array(glb, o + k2, 1)[0] = 0;
+        return glb;
+    }
+
+    // The recorded clips to export: every clip of RECORD ALL CLIPS, or the single recording.
+    function collectClipSets() {
+        // RECORD ALL CLIPS fills window.clips (and clears recordedFrames), so even one
+        // clip from it (cancelled after the first) must come from window.clips.
+        let clipSets = [];
+        if (window.clips && window.clips.length) {
+            window.clips.forEach((c) => {
+                if (c && c.frames && c.frames.length > 1) {
+                    clipSets.push({ name: c.name, frames: c.frames });
+                }
+            });
+        }
+        if (clipSets.length) {
+            log(`export: multi-clip mode, clips=${clipSets.length}`);
+        } else {
+            // single-clip path: same data source and behaviour as before
+            clipSets = (window.recordedFrames.length > 1)
+                ? [{ name: `${modelBaseName()}_anim`, frames: window.recordedFrames }] : [];
+        }
+        return clipSets;
+    }
+
+    // Material finishing: textures by channel (with the merged metal/rough and opacity maps), flat
+    // values from the viewer's material model for untextured channels, and the double-sided flag.
+    // pool: buildTexturePool(); matHasUV: mesh name -> the mesh has UVs.
+    function finishMaterials(mats, matsChannelInfo, matsFlat, matHasUV, pool) {
+        const textures = pool.textures, textureUrlToIndex = pool.textureUrlToIndex, textureNameToIndex = pool.textureNameToIndex;
+        function findTexIdx(info) {
+            if (!info) return undefined;
+            const u = normalizeUrl(info.url);
+            if (u && textureUrlToIndex[u] !== undefined) return textureUrlToIndex[u];
+            const n = sanitizeTextureName(info.name);
+            if (n && textureNameToIndex[n] !== undefined) return textureNameToIndex[n];
+            return undefined;
+        }
+
+        function flatEm(fl) {
+            const e = fl && fl.EmitColor;
+            const f = (e && typeof e.factor === 'number') ? e.factor : 1;
+            return Math.max(0, Math.min(1, f));
+        }
+
+        // Channels the viewer shows with a texture that did not make it into the export.
+        mats.forEach((m, mi) => {
+            const chan = matsChannelInfo[mi] || {};
+            (() => {
+                const fl = matsFlat[mi], mp = fl && fl.__map, lost = [], atl = [];
+                if (mp) for (let mk2 in mp) {
+                    if (!mp.hasOwnProperty(mk2) || !(mp[mk2] >= 0) || mk2 === 'Inspector' || mk2 === 'Matcap') continue;
+                    const inf = chan[mk2];
+                    if (!inf || inf.atlas || !(inf.url || inf.name)) { atl.push(mk2); continue; }
+                    if (findTexIdx(inf) === undefined) lost.push(mk2);
+                }
+                if (lost.length) warn(`material ${m.name}: channels with a texture in the viewer but not in the export: ${lost.join(', ')}`);
+                if (atl.length) log(`material ${m.name}: colour atlas / no image for ${atl.join(', ')}, using flat material values`);
+            })();
+        });
+        let anyRealTex = false;
+        for (let cmi in matsChannelInfo) {
+            if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
+            for (let ck in matsChannelInfo[cmi]) {
+                const ci = matsChannelInfo[cmi][ck];
+                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
+            }
+        }
+        if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
+
+        if (textures.length) {
+            mats.forEach((m, mi) => {
+                if (!matHasUV[m.name]) return;
+                const chan = matsChannelInfo[mi] || {};
+                let assigned = false;
+
+                const albedo = chan.AlbedoPBR || chan.DiffusePBR || chan.BaseColorPBR || chan.DiffuseColor;
+                const ai = findTexIdx(albedo);
+                if (ai !== undefined) {
+                    m.pbrMetallicRoughness.baseColorTexture = { index: ai };
+                    assigned = true;
+                }
+
+                const nrm = chan.NormalMap || chan.NormalPBR;
+                const ni = findTexIdx(nrm);
+                if (ni !== undefined) {
+                    m.normalTexture = { index: ni };
+                    assigned = true;
+                }
+
+                const ao = chan.AOPBR || chan.OcclusionPBR;
+                const oi = findTexIdx(ao);
+                if (oi !== undefined) {
+                    m.occlusionTexture = { index: oi };
+                    assigned = true;
+                }
+
+                const em = chan.EmissivePBR || chan.EmissionPBR || chan.EmitColor;
+                const ei = findTexIdx(em);
+                if (ei !== undefined) {
+                    m.emissiveTexture = { index: ei };
+                    // glTF multiplies the texture by emissiveFactor (default 0 = no emission).
+                    const emF = flatEm(matsFlat[mi]);
+                    m.emissiveFactor = [emF, emF, emF];
+                    assigned = true;
+                }
+
+                // Merged MR (see mergeMRTextures): registered in the
+                // pool under name "<sanitized mesh name>_MR".
+                const mrName = `${sanitizeTextureName(m.name)}_MR`;
+                const mrIdx = textureNameToIndex[mrName];
+                if (mrIdx !== undefined) {
+                    m.pbrMetallicRoughness.metallicRoughnessTexture = { index: mrIdx };
+                    assigned = true;
+                }
+
+                // Merged opacity (see mergeOpacityTextures): the RGBA texture
+                // replaces the plain base color and the material blends.
+                const alphaIdx = textureNameToIndex[`${_alphaShare[sanitizeTextureName(m.name)] || sanitizeTextureName(m.name)}_Alpha`];
+                if (alphaIdx !== undefined) {
+                    m.pbrMetallicRoughness.baseColorTexture = { index: alphaIdx };
+                    if (_opacityKind[sanitizeTextureName(m.name)] === 'alphamask') {
+                        m.alphaMode = 'MASK'; m.alphaCutoff = 0.5;
+                    } else {
+                        m.alphaMode = 'BLEND';
+                    }
+                    assigned = true;
+                    log(`material ${m.name}: alphaMode ${m.alphaMode} with merged ${_opacityKind[sanitizeTextureName(m.name)] || 'opacity'} texture`);
+                }
+
+                if (!assigned) {
+                    // No texture of this material was captured. Do not borrow texture 0
+                    // (an unrelated image); keep the plain material and say so.
+                    warn('material ' + m.name + ': no texture found in the capture pool, exported without textures'
+                         + (CONFIG.TEXTURE_WAIT_SECONDS ? '' : ' (texture wait is off)'));
+                }
+            });
+        }
+
+        // Flat material values for channels without a texture (texture-less models): base
+        // color, metalness, roughness, emission. Textured channels keep factor 1 so the
+        // texture alone decides, as before.
+        mats.forEach((m, mi) => {
+            const flat = matsFlat[mi], chan = matsChannelInfo[mi] || {}, pbr = m.pbrMetallicRoughness;
+            if (!flat) return;
+            const did = [];
+            const cmap = flat.__map;
+            function texd(n) {
+                // A channel counts as textured only when it has a real image (url or name) that is not
+                // the generated colour atlas; otherwise the flat material value is the best data we have.
+                const real = !!(chan[n] && (chan[n].url || chan[n].name) && !chan[n].atlas);
+                if (cmap && typeof cmap[n] === 'number') return cmap[n] >= 0 && real;
+                return real;
+            }
+            const chKeys = [];
+            for (let chk in chan) if (chan.hasOwnProperty(chk) && (chan[chk].url || chan[chk].name)) chKeys.push(chk);
+            const mapKeys = [];
+            if (cmap) for (let mpk in cmap) if (cmap.hasOwnProperty(mpk) && cmap[mpk] >= 0) mapKeys.push(`${mpk}=${cmap[mpk]}`);
+            log('material ' + m.name + ': texture channels [' + chKeys.join(',') + '] mapping [' + mapKeys.join(',') + ']' +
+                (pbr.baseColorTexture ? ' baseColorTexture set' : ' no baseColorTexture'));
+            // Base colour: AlbedoPBR (metal/rough workflow) or DiffusePBR / DiffuseColor (specular/gloss and
+            // classic workflows), whichever channel is switched on.
+            const alb = [flat.AlbedoPBR, flat.DiffusePBR, flat.DiffuseColor].find((c) => c && c.enable) || flat.AlbedoPBR;
+            const alphaOnlyTex = !!_opacityNoColor[sanitizeTextureName(m.name)];
+            if (alb && alb.enable && (alb.color || typeof alb.factor === 'number') && (!pbr.baseColorTexture || alphaOnlyTex) && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
+                // No colour value means white scaled by the factor (factor 0 = black base, colour from emission only).
+                const af = (typeof alb.factor === 'number') ? alb.factor : 1, ac = alb.color || [1, 1, 1];
+                const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
+                pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
+                did.push('base color');
+            }
+            const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
+            // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
+            const mrE = saveimagecache2[`__merged_mr__:${sanitizeTextureName(m.name)}`], mrTex = !!pbr.metallicRoughnessTexture;
+            const mFlat = !texd('MetalnessPBR') && !(mrTex && mrE && mrE.hasM);
+            const rFlat = !texd('RoughnessPBR') && !(mrTex && mrE && mrE.hasR);
+            if (mrTex && !(mrE && mrE.hasM)) pbr.metallicFactor = 0;   // non-metal unless a flat value follows
+            if (mt && mt.enable && typeof mt.factor === 'number' && mFlat) {
+                pbr.metallicFactor = CONFIG.FLAT_MR_FROM_VIEWER ? mt.factor : 0; did.push('metalness');
+            }
+            if (rg && rg.enable && typeof rg.factor === 'number' && rFlat) {
+                pbr.roughnessFactor = CONFIG.FLAT_MR_FROM_VIEWER ? rg.factor : 0.5; did.push('roughness');
+            }
+            const op = flat.Opacity || flat.AlphaMask;
+            if (op && op.enable && pbr.baseColorTexture && !m.alphaMode && _opacityOneFile[sanitizeTextureName(m.name)]) {
+                const isBlend = !!flat.Opacity && /blend/i.test(String(op.type || ''));
+                m.alphaMode = isBlend ? 'BLEND' : 'MASK';
+                if (!isBlend) m.alphaCutoff = 0.5;
+                did.push(`opacity ${m.alphaMode} (${op.type})`);
+            }
+            // Opacity given as a plain value (no mask image): use it as base colour alpha.
+            const opf = flat.Opacity;
+            if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && typeof opf.factor === 'number' && opf.factor < 0.999) {
+                if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
+                pbr.baseColorFactor[3] = Math.max(0, Math.min(1, opf.factor));
+                m.alphaMode = 'BLEND';
+                did.push(`opacity ${pbr.baseColorFactor[3].toFixed(2)} (${opf.type})`);
+            }
+            if (mt && mt.enable === false && mFlat) {
+                pbr.metallicFactor = 0; did.push('metalness off');
+            }
+            const em = flat.EmitColor;
+            if (em && em.enable && em.color && !m.emissiveTexture && !texd('EmitColor')) {
+                const ef = (typeof em.factor === 'number') ? em.factor : 1;
+                const ev = [Math.min(1, em.color[0] * ef), Math.min(1, em.color[1] * ef), Math.min(1, em.color[2] * ef)];
+                if (ev[0] > 0 || ev[1] > 0 || ev[2] > 0) { m.emissiveFactor = ev; did.push('emission'); }
+            }
+            if (did.length) log(`material ${m.name}: flat values from material model (${did.join(', ')})`);
+        });
+
+        // Sketchfab can render a model two-sided (Inspector: Single Sided OFF), which glTF
+        // expresses per material. DOUBLE_SIDED marks all materials two-sided; with
+        // DOUBLE_SIDED_AUTO, materials the viewer draws single-sided (cullFace set) stay single-sided.
+        if (CONFIG.DOUBLE_SIDED) {
+            const singleNames = [];
+            mats.forEach((m, mi) => {
+                const cv = matsFlat[mi] ? matsFlat[mi].__cull : undefined;   // 1029 (GL_BACK) = Single Sided ON, 0 = OFF
+                const on = !(cv === undefined || cv === null || cv === 0 || cv === false || /^(none|0|false|off)?$/i.test(String(cv)));
+                if (CONFIG.DOUBLE_SIDED_AUTO && on) { singleNames.push(m.name); return; }
+                m.doubleSided = true;
+            });
+            log('materials marked doubleSided: ' + (mats.length - singleNames.length) + ' of ' + mats.length +
+                (singleNames.length ? ` (single sided in the viewer: ${singleNames.join(', ')})` : ''));
+        }
+    }
+
+    // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
+    function _downloadGLBSync(skipGlb) {
+        try {
             const allNodes = window.allmodel;
             const nodeMap = new Map();
             const nodes = [];
 
             allNodes.forEach((obj, idx) => {
                 nodeMap.set(obj, idx);
-                const name = obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${idx}`);
+                const name = meshName(obj, idx);
                 const world = computeWorldMatrix(obj);
                 nodes.push({ name, matrix: world, mesh: undefined, children: [] });
             });
@@ -3389,7 +3254,7 @@
 
             function addBV(ta, target) {
                 const len = ta.byteLength;
-                const al = pad(off), padn = al - off;
+                const al = pad4(off), padn = al - off;
                 if (padn > 0) { binChunks.push(new Uint8Array(padn)); off += padn; }
                 const idx = bvs.length;
                 const bv = { buffer: 0, byteOffset: off, byteLength: len };
@@ -3405,14 +3270,14 @@
                 if (!obj._primitives) return;
                 const mdl = parseobj(obj);
                 if (!mdl.vertex || mdl.vertex.length === 0) return;
-                const nm = obj._name || (obj.stateset && obj.stateset._name) || (`mesh_${mIdx}`);
+                const nm = meshName(obj, mIdx);
                 const vc = mdl.vertex.length / 3;
 
                 const twinIdx = wireOverlayTwin(allNodes, mIdx);
                 if (twinIdx >= 0) {
                     const twinObj = allNodes[twinIdx];
                     log('mesh ' + nm + ': skipped, it is the wireframe overlay (lines only) of "' +
-                        (twinObj._name || (twinObj.stateset && twinObj.stateset._name) || (`mesh_${twinIdx}`)) + '"');
+                        meshName(twinObj, twinIdx) + '"');
                     skippedNodes[mIdx] = true;
                     return;
                 }
@@ -3452,8 +3317,8 @@
                 if (mdl.uv.length) {
                     // glTF uses top-left UV origin; Sketchfab's osgjs uses
                     // bottom-left. Flip V (index 1 of each pair) so the
-                    // texture lands right-side up. Keep this export-local:
-                    // if we later add an FBX path, FBX may not want it.
+                    // texture lands right-side up. FbxWriter flips V back
+                    // (FBX uses the bottom-left origin).
                     const uvArr = new Float32Array(mdl.uv);
                     for (let uvi = 1; uvi < uvArr.length; uvi += 2) {
                         uvArr[uvi] = 1 - uvArr[uvi];
@@ -3463,152 +3328,23 @@
                                 componentType: 5126, count: vc, type: 'VEC2' });
                     matHasUV[nm] = true;
                 }
-                // Vertex colors (Sketchfab "Color" attribute). Uint8 RGBA is written as a
-                // normalized UNSIGNED_BYTE VEC4; float RGBA as FLOAT VEC4; RGB is widened
-                // to float VEC3 (3-byte ubyte elements are not 4-byte aligned in glTF).
-                let aC = -1, colArr = mdl.color;
-                if (colArr && colArr.length) {
-                    const isU8 = (colArr instanceof Uint8Array || colArr instanceof Uint8ClampedArray);
-                    const conv = !!CONFIG.VERTEX_COLOR_SRGB;
-                    const cStride = (colArr.length === vc * 4) ? 4 : ((colArr.length === vc * 3) ? 3 : 0);
-                    if (cStride && !conv && cStride === 4) {
-                        aC = accs.length;
-                        if (isU8) {
-                            accs.push({ bufferView: addBV(new Uint8Array(colArr), 34962), componentType: 5121,
-                                        normalized: true, count: vc, type: 'VEC4' });
-                        } else {
-                            accs.push({ bufferView: addBV(new Float32Array(colArr), 34962), componentType: 5126,
-                                        count: vc, type: 'VEC4' });
-                        }
-                        log('vertex colors:', nm, isU8 ? '(RGBA8)' : '(RGBA float)');
-                    } else if (cStride) {
-                        // Float output (RGB widened since 3-byte ubyte elements are not 4-byte
-                        // aligned). With VERTEX_COLOR_SRGB the RGB channels go sRGB -> linear.
-                        const cf = new Float32Array(colArr.length);
-                        for (let cfi = 0; cfi < cf.length; cfi++) {
-                            let cv = isU8 ? colArr[cfi] / 255 : colArr[cfi];
-                            if (conv && (cStride === 3 || cfi % 4 !== 3)) {
-                                cv = (cv <= 0.04045) ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
-                            }
-                            cf[cfi] = cv;
-                        }
-                        aC = accs.length;
-                        accs.push({ bufferView: addBV(cf, 34962), componentType: 5126, count: vc, type: cStride === 4 ? 'VEC4' : 'VEC3' });
-                        log('vertex colors:', nm, cStride === 4 ? '(RGBA)' : '(RGB)', conv ? 'sRGB->linear' : 'as is');
-                    } else {
-                        warn('vertex colors: unexpected length', colArr.length, 'for', vc, 'vertices on', nm, ', skipped');
-                    }
-                }
+                // Vertex colors (Sketchfab "Color" attribute), see vertexColorAccessor.
+                let aC = -1;
+                const colAcc = vertexColorAccessor(mdl.color, vc, nm, addBV);
+                if (colAcc) { aC = accs.length; accs.push(colAcc); }
                 // A mesh can carry several index primitives (a triangle list plus extra
                 // lists, strips or fans). Merge every triangle-type primitive into one
                 // TRIANGLES list so no faces go missing; other modes (points, lines) are
                 // only used when the mesh has no triangle primitive at all.
-                let mergedInd = null, mergedMode = 4;
+                let mergedInd = null;
                 if (mdl.primitives.length > 0) {
                     let triParts = [], skippedP = 0, modeLog = [];
                     mdl.primitives.forEach((pr) => {
-                        let pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices, tl = [], t2;
+                        const pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices;
                         modeLog.push(`${pm}x${pi2 ? pi2.length : 0}`);
                         if (!pi2 || !pi2.length) return;
-                        // Degenerate triangles (repeated index) are strip joins; drop them so
-                        // Blender does not show long zero-area edges between distant vertices.
-                        let oobN = 0, degN = 0, tpos = [];
-                        function addTri(a, b, c) {
-                            if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) { tl.push(a, b, c); tpos.push(t2); }
-                            else if (a >= vc || b >= vc || c >= vc) oobN++;
-                            else degN++;
-                        }
-                        // An index >= vertex count (WebGL2 primitive restart value 65535 / 4294967295) ends a
-                        // strip or fan: restart the winding parity after it instead of treating it as a vertex.
-                        let rs = 0;
-                        if (pm === 4) {
-                            for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) addTri(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]);
-                        } else if (pm === 5) {
-                            for (t2 = 0; t2 < pi2.length; t2++) {
-                                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
-                                if (t2 - rs < 2) continue;
-                                if ((t2 - rs) % 2 === 0) addTri(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
-                                else addTri(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
-                            }
-                        } else if (pm === 6) {
-                            for (t2 = 0; t2 < pi2.length; t2++) {
-                                if (pi2[t2] >= vc) { rs = t2 + 1; oobN++; continue; }
-                                if (t2 - rs < 2) continue;
-                                addTri(pi2[rs], pi2[t2 - 1], pi2[t2]);
-                            }
-                        } else { skippedP++; return; }
-                        // Diagnostic for stray long thin triangles ("stripes"): flag triangles whose longest edge is
-                        // far above the typical edge of this mesh and print where they come from in the index list.
-                        if (tl.length) (() => {
-                            let vv = mdl.vertex, nT = tl.length / 3, q, lens = [], mn = [1e30, 1e30, 1e30], mx = [-1e30, -1e30, -1e30];
-                            function el(i, j) { const dx = vv[i * 3] - vv[j * 3], dy = vv[i * 3 + 1] - vv[j * 3 + 1], dz = vv[i * 3 + 2] - vv[j * 3 + 2]; return Math.sqrt(dx * dx + dy * dy + dz * dz); }
-                            for (q = 0; q < vc; q++) for (let ax = 0; ax < 3; ax++) { const cv = vv[q * 3 + ax]; if (cv < mn[ax]) mn[ax] = cv; if (cv > mx[ax]) mx[ax] = cv; }
-                            const size = Math.sqrt(Math.pow(mx[0] - mn[0], 2) + Math.pow(mx[1] - mn[1], 2) + Math.pow(mx[2] - mn[2], 2));
-                            const step = Math.max(1, Math.floor(nT / 2000));
-                            for (q = 0; q < nT; q += step) lens.push(Math.max(el(tl[q * 3], tl[q * 3 + 1]), el(tl[q * 3 + 1], tl[q * 3 + 2]), el(tl[q * 3], tl[q * 3 + 2])));
-                            lens.sort((a, b) => a - b);
-                            let med = lens[lens.length >> 1] || 0, lim = Math.max(20 * med, 0.05 * size), hits = 0, shown = 0, drop = {}, nDrop = 0, cand = [];
-                            for (q = 0; q < nT; q++) {
-                                const a0 = tl[q * 3], b0 = tl[q * 3 + 1], c0 = tl[q * 3 + 2];
-                                const L = Math.max(el(a0, b0), el(b0, c0), el(a0, c0));
-                                if (!(L > lim)) continue;
-                                hits++;
-                                // Bridging triangle of a strip join without repeated vertices: very long and almost no width.
-                                const ux = vv[b0 * 3] - vv[a0 * 3], uy = vv[b0 * 3 + 1] - vv[a0 * 3 + 1], uz = vv[b0 * 3 + 2] - vv[a0 * 3 + 2];
-                                const wx = vv[c0 * 3] - vv[a0 * 3], wy = vv[c0 * 3 + 1] - vv[a0 * 3 + 1], wz = vv[c0 * 3 + 2] - vv[a0 * 3 + 2];
-                                const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
-                                const height = Math.sqrt(cx * cx + cy * cy + cz * cz) / L;   // 2*area / longest edge
-                                if (CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) cand.push(q);
-                                if (shown < 3 && CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) {
-                                    shown++;
-                                    const at = tpos[q], ctx = [];
-                                    for (let ci = Math.max(0, at - 5); ci <= Math.min(pi2.length - 1, at + 3); ci++) ctx.push((ci === at ? '*' : '') + pi2[ci]);
-                                    log('long triangle:', nm, `mode ${pm}`, 'tri (' + a0 + ',' + b0 + ',' + c0 + ') longest edge ' + L.toFixed(3) +
-                                        ' (typical ' + med.toFixed(4) + ', mesh size ' + size.toFixed(3) + ') at index ' + at + ' of ' + pi2.length + ', indices around: ' + ctx.join(' '));
-                                }
-                            }
-                            // A bridging triangle spans a gap: one of its long edges is used by no other triangle
-                            // (vertices welded by position). Long thin tubes/rods share every long edge, so they stay.
-                            if (cand.length) {
-                                let qs = Math.max(size * 1e-6, 1e-9), wmap = {}, wid = new Int32Array(vc), nw = 0, vi;
-                                for (vi = 0; vi < vc; vi++) {
-                                    const wk = `${Math.round(vv[vi * 3] / qs)},${Math.round(vv[vi * 3 + 1] / qs)},${Math.round(vv[vi * 3 + 2] / qs)}`;
-                                    if (wmap[wk] === undefined) wmap[wk] = nw++;
-                                    wid[vi] = wmap[wk];
-                                }
-                                const ek = (i, j) => { const a1 = wid[i], b1 = wid[j]; return a1 < b1 ? `${a1}_${b1}` : `${b1}_${a1}`; };
-                                let ecount = {}, ci2, e3;
-                                for (ci2 = 0; ci2 < cand.length; ci2++) {
-                                    const cq = cand[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
-                                    for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > lim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
-                                }
-                                for (q = 0; q < nT; q++) for (e3 = 0; e3 < 3; e3++) {
-                                    const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
-                                    if (ecount[k3] !== undefined) ecount[k3]++;
-                                }
-                                // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
-                                // grass, hair strip) does not, so it stays.
-                                const isCand = {}, onReal = new Uint8Array(nw);
-                                for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
-                                for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
-                                for (ci2 = 0; ci2 < cand.length; ci2++) {
-                                    let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
-                                    for (e3 = 0; e3 < 3; e3++) {
-                                        const ka = ek(cw[e3], cw[(e3 + 1) % 3]);
-                                        if (ecount[ka] === 1 && onReal[wid[cw[e3]]] && onReal[wid[cw[(e3 + 1) % 3]]]) open = true;
-                                    }
-                                    if (open) { drop[cq2] = true; nDrop++; }
-                                }
-                            }
-                            if (nDrop) {
-                                const kept = [];
-                                for (q = 0; q < nT; q++) if (!drop[q]) kept.push(tl[q * 3], tl[q * 3 + 1], tl[q * 3 + 2]);
-                                tl = kept;
-                                log(`mesh ${nm}: dropped ${nDrop} bridging sliver triangle(s) from the strip (stripes)`);
-                            }
-                            if (hits > nDrop) log(`mesh ${nm}: ${hits - nDrop} long thin triangle(s) kept (real geometry, edges shared)`);
-                        })();
-                        if (oobN) log('indices:', nm, `mode ${pm}`, `${pi2.length} indices ->`, `${tl.length / 3} triangles, restart/out-of-range ${oobN}, degenerate ${degN}, vertices ${vc}`);
+                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm);
+                        if (!tl) { skippedP++; return; }
                         triParts.push(tl);
                     });
                     if (mdl.primitives.length > 1) log('primitives:', nm, mdl.primitives.length, `(mode x indices: ${modeLog.join(', ')})`);
@@ -3663,40 +3399,8 @@
                     log('skinned mesh:', nm, `jointsMax=${mj}`);
                 }
 
-                // Morph targets. The viewer blends  (1 - sum w) * base + sum w_k * target_k  with
-                // absolute targets, which equals glTF's  base + sum w_k * (target_k - base).
-                const morphTargets = [], mAttr = obj._attributes || {};
-                function morphEls(a) {
-                    const b = a && (a._initialBufferArray || a._bufferArray);
-                    return (b && b._elements) || (a && a._elements) || null;
-                }
-                for (let mk = 0, mN = morphTargetCount(obj); mk < mN; mk++) {
-                    const tv = morphEls(mAttr[`Vertex_${mk}`]);
-                    if (!tv || tv.length !== mdl.vertex.length) {
-                        warn('morph target', mk, 'of', nm, 'skipped (vertex data missing or wrong size)');
-                        continue;
-                    }
-                    const dv = new Float32Array(tv.length), dMin = [Infinity, Infinity, Infinity], dMax = [-Infinity, -Infinity, -Infinity];
-                    for (let di = 0; di < tv.length; di++) {
-                        const dd = tv[di] - mdl.vertex[di];
-                        dv[di] = dd;
-                        const dax = di % 3;
-                        if (dd < dMin[dax]) dMin[dax] = dd;
-                        if (dd > dMax[dax]) dMax[dax] = dd;
-                    }
-                    const tgt = { POSITION: accs.length };
-                    accs.push({ bufferView: addBV(dv, 34962), componentType: 5126, count: vc,
-                                type: 'VEC3', min: dMin, max: dMax });
-                    let tn = morphEls(mAttr[`Normal_${mk}`]);
-                    if (tn && mdl.normal.length && tn.length === mdl.normal.length) {
-                        tn = unitNormals(tn);
-                        const dn = new Float32Array(tn.length);
-                        for (let dni = 0; dni < tn.length; dni++) dn[dni] = tn[dni] - mdl.normal[dni];
-                        tgt.NORMAL = accs.length;
-                        accs.push({ bufferView: addBV(dn, 34962), componentType: 5126, count: vc, type: 'VEC3' });
-                    }
-                    morphTargets.push(tgt);
-                }
+                // Morph targets, see morphTargetAccessors.
+                const morphTargets = morphTargetAccessors(obj, mdl, vc, nm, accs, addBV);
                 if (morphTargets.length) log('morph targets:', nm, morphTargets.length);
 
                 const primMode = noTris ? 0 : mergedInd ? 4 : ((mdl.primitives.length > 0 && typeof mdl.primitives[0].mode === 'number') ? mdl.primitives[0].mode : 4);
@@ -3727,241 +3431,14 @@
                 if (ni !== undefined) nodes[ni].mesh = mshIdx;
             });
 
-            let images = [], textures = [], imageKeys = [], usedSafe = {};
-            const textureUrlToIndex  = {};
-            const textureNameToIndex = {};
-            for (let key in saveimagecache2) {
-                if (!saveimagecache2.hasOwnProperty(key)) continue;
-                const t = saveimagecache2[key];
-                if (!t || !t.dataURL) continue;
-                const ext = t.fileExt || '.png';
-                if (!objects[(t.name || 'texture') + ext]) { warn(`texture file missing, not referenced: ${t.name || 'texture'}${ext}`); continue; }
-                // ASCII-safe file name: no encoding issues in URIs or zip loaders.
-                const safeBase = String(t.name || 'texture').replace(/[^A-Za-z0-9._-]+/g, '_') || 'texture';
-                let safeName = safeBase + ext, sc = 1;
-                while (usedSafe[safeName.toLowerCase()]) safeName = `${safeBase}_${sc++}${ext}`;   // case-insensitive file systems
-                usedSafe[safeName.toLowerCase()] = true;
-                const path = `textures/${safeName}`;
-                const ii = images.length;
-                imageKeys.push({ key: (t.name || 'texture') + ext, safe: safeName });
-                images.push({ uri: path });
-                textures.push({ source: ii });
-                const nu = normalizeUrl(key);
-                if (nu) textureUrlToIndex[nu] = ii;
-                const sn = sanitizeTextureName(t.name);
-                if (sn) textureNameToIndex[sn] = ii;
-            }
+            const pool = buildTexturePool();
+            let images = pool.images, textures = pool.textures;
+            const imageKeys = pool.imageKeys;
 
-            function findTexIdx(info) {
-                if (!info) return undefined;
-                const u = normalizeUrl(info.url);
-                if (u && textureUrlToIndex[u] !== undefined) return textureUrlToIndex[u];
-                const n = sanitizeTextureName(info.name);
-                if (n && textureNameToIndex[n] !== undefined) return textureNameToIndex[n];
-                return undefined;
-            }
-
-            function flatEm(fl) {
-                const e = fl && fl.EmitColor;
-                const f = (e && typeof e.factor === 'number') ? e.factor : 1;
-                return Math.max(0, Math.min(1, f));
-            }
-
-            // Channels the viewer shows with a texture that did not make it into the export.
-            mats.forEach((m, mi) => {
-                const chan = matsChannelInfo[mi] || {};
-                (() => {
-                    const fl = matsFlat[mi], mp = fl && fl.__map, lost = [], atl = [];
-                    if (mp) for (let mk2 in mp) {
-                        if (!mp.hasOwnProperty(mk2) || !(mp[mk2] >= 0) || mk2 === 'Inspector' || mk2 === 'Matcap') continue;
-                        const inf = chan[mk2];
-                        if (!inf || inf.atlas || !(inf.url || inf.name)) { atl.push(mk2); continue; }
-                        if (findTexIdx(inf) === undefined) lost.push(mk2);
-                    }
-                    if (lost.length) warn(`material ${m.name}: channels with a texture in the viewer but not in the export: ${lost.join(', ')}`);
-                    if (atl.length) log(`material ${m.name}: colour atlas / no image for ${atl.join(', ')}, using flat material values`);
-                })();
-            });
-            let anyRealTex = false;
-            for (let cmi in matsChannelInfo) {
-                if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
-                for (let ck in matsChannelInfo[cmi]) {
-                    const ci = matsChannelInfo[cmi][ck];
-                    if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
-                }
-            }
-            if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
-
-            if (textures.length) {
-                mats.forEach((m, mi) => {
-                    if (!matHasUV[m.name]) return;
-                    const chan = matsChannelInfo[mi] || {};
-                    let assigned = false;
-
-                    const albedo = chan.AlbedoPBR || chan.DiffusePBR || chan.BaseColorPBR || chan.DiffuseColor;
-                    const ai = findTexIdx(albedo);
-                    if (ai !== undefined) {
-                        m.pbrMetallicRoughness.baseColorTexture = { index: ai };
-                        assigned = true;
-                    }
-
-                    const nrm = chan.NormalMap || chan.NormalPBR;
-                    const ni = findTexIdx(nrm);
-                    if (ni !== undefined) {
-                        m.normalTexture = { index: ni };
-                        assigned = true;
-                    }
-
-                    const ao = chan.AOPBR || chan.OcclusionPBR;
-                    const oi = findTexIdx(ao);
-                    if (oi !== undefined) {
-                        m.occlusionTexture = { index: oi };
-                        assigned = true;
-                    }
-
-                    const em = chan.EmissivePBR || chan.EmissionPBR || chan.EmitColor;
-                    const ei = findTexIdx(em);
-                    if (ei !== undefined) {
-                        m.emissiveTexture = { index: ei };
-                        // glTF multiplies the texture by emissiveFactor (default 0 = no emission).
-                        const emF = flatEm(matsFlat[mi]);
-                        m.emissiveFactor = [emF, emF, emF];
-                        assigned = true;
-                    }
-
-                    // Merged MR (see mergeMRTextures): registered in the
-                    // pool under name "<sanitized mesh name>_MR".
-                    const mrName = `${sanitizeTextureName(m.name)}_MR`;
-                    const mrIdx = textureNameToIndex[mrName];
-                    if (mrIdx !== undefined) {
-                        m.pbrMetallicRoughness.metallicRoughnessTexture = { index: mrIdx };
-                        assigned = true;
-                    }
-
-                    // Merged opacity (see mergeOpacityTextures): the RGBA texture
-                    // replaces the plain base color and the material blends.
-                    const alphaIdx = textureNameToIndex[`${_alphaShare[sanitizeTextureName(m.name)] || sanitizeTextureName(m.name)}_Alpha`];
-                    if (alphaIdx !== undefined) {
-                        m.pbrMetallicRoughness.baseColorTexture = { index: alphaIdx };
-                        if (_opacityKind[sanitizeTextureName(m.name)] === 'alphamask') {
-                            m.alphaMode = 'MASK'; m.alphaCutoff = 0.5;
-                        } else {
-                            m.alphaMode = 'BLEND';
-                        }
-                        assigned = true;
-                        log(`material ${m.name}: alphaMode ${m.alphaMode} with merged ${_opacityKind[sanitizeTextureName(m.name)] || 'opacity'} texture`);
-                    }
-
-                    if (!assigned) {
-                        // No texture of this material was captured. Do not borrow texture 0
-                        // (an unrelated image); keep the plain material and say so.
-                        warn('material ' + m.name + ': no texture found in the capture pool, exported without textures'
-                             + (CONFIG.TEXTURE_WAIT_SECONDS ? '' : ' (texture wait is off)'));
-                    }
-                });
-            }
-
-            // Flat material values for channels without a texture (texture-less models): base
-            // color, metalness, roughness, emission. Textured channels keep factor 1 so the
-            // texture alone decides, as before.
-            mats.forEach((m, mi) => {
-                const flat = matsFlat[mi], chan = matsChannelInfo[mi] || {}, pbr = m.pbrMetallicRoughness;
-                if (!flat) return;
-                const did = [];
-                const cmap = flat.__map;
-                function texd(n) {
-                    // A channel counts as textured only when it has a real image (url or name) that is not
-                    // the generated colour atlas; otherwise the flat material value is the best data we have.
-                    const real = !!(chan[n] && (chan[n].url || chan[n].name) && !chan[n].atlas);
-                    if (cmap && typeof cmap[n] === 'number') return cmap[n] >= 0 && real;
-                    return real;
-                }
-                const chKeys = [];
-                for (let chk in chan) if (chan.hasOwnProperty(chk) && (chan[chk].url || chan[chk].name)) chKeys.push(chk);
-                const mapKeys = [];
-                if (cmap) for (let mpk in cmap) if (cmap.hasOwnProperty(mpk) && cmap[mpk] >= 0) mapKeys.push(`${mpk}=${cmap[mpk]}`);
-                log('material ' + m.name + ': texture channels [' + chKeys.join(',') + '] mapping [' + mapKeys.join(',') + ']' +
-                    (pbr.baseColorTexture ? ' baseColorTexture set' : ' no baseColorTexture'));
-                const alb = flat.AlbedoPBR;
-                const alphaOnlyTex = !!_opacityNoColor[sanitizeTextureName(m.name)];
-                if (alb && alb.enable && (alb.color || typeof alb.factor === 'number') && (!pbr.baseColorTexture || alphaOnlyTex) && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
-                    // No colour value means white scaled by the factor (factor 0 = black base, colour from emission only).
-                    const af = (typeof alb.factor === 'number') ? alb.factor : 1, ac = alb.color || [1, 1, 1];
-                    const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
-                    pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
-                    did.push('base color');
-                }
-                const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
-                // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
-                const mrE = saveimagecache2[`__merged_mr__:${sanitizeTextureName(m.name)}`], mrTex = !!pbr.metallicRoughnessTexture;
-                const mFlat = !texd('MetalnessPBR') && !(mrTex && mrE && mrE.hasM);
-                const rFlat = !texd('RoughnessPBR') && !(mrTex && mrE && mrE.hasR);
-                if (mrTex && !(mrE && mrE.hasM)) pbr.metallicFactor = 0;   // non-metal unless a flat value follows
-                if (mt && mt.enable && typeof mt.factor === 'number' && mFlat) {
-                    pbr.metallicFactor = CONFIG.FLAT_MR_FROM_VIEWER ? mt.factor : 0; did.push('metalness');
-                }
-                if (rg && rg.enable && typeof rg.factor === 'number' && rFlat) {
-                    pbr.roughnessFactor = CONFIG.FLAT_MR_FROM_VIEWER ? rg.factor : 0.5; did.push('roughness');
-                }
-                const op = flat.Opacity || flat.AlphaMask;
-                if (op && op.enable && pbr.baseColorTexture && !m.alphaMode && _opacityOneFile[sanitizeTextureName(m.name)]) {
-                    const isBlend = !!flat.Opacity && /blend/i.test(String(op.type || ''));
-                    m.alphaMode = isBlend ? 'BLEND' : 'MASK';
-                    if (!isBlend) m.alphaCutoff = 0.5;
-                    did.push(`opacity ${m.alphaMode} (${op.type})`);
-                }
-                // Opacity given as a plain value (no mask image): use it as base colour alpha.
-                const opf = flat.Opacity;
-                if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && typeof opf.factor === 'number' && opf.factor < 0.999) {
-                    if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
-                    pbr.baseColorFactor[3] = Math.max(0, Math.min(1, opf.factor));
-                    m.alphaMode = 'BLEND';
-                    did.push(`opacity ${pbr.baseColorFactor[3].toFixed(2)} (${opf.type})`);
-                }
-                if (mt && mt.enable === false && mFlat) {
-                    pbr.metallicFactor = 0; did.push('metalness off');
-                }
-                const em = flat.EmitColor;
-                if (em && em.enable && em.color && !m.emissiveTexture && !texd('EmitColor')) {
-                    const ef = (typeof em.factor === 'number') ? em.factor : 1;
-                    const ev = [Math.min(1, em.color[0] * ef), Math.min(1, em.color[1] * ef), Math.min(1, em.color[2] * ef)];
-                    if (ev[0] > 0 || ev[1] > 0 || ev[2] > 0) { m.emissiveFactor = ev; did.push('emission'); }
-                }
-                if (did.length) log(`material ${m.name}: flat values from material model (${did.join(', ')})`);
-            });
-
-            // Sketchfab can render a model two-sided (Inspector: Single Sided OFF), which glTF
-            // expresses per material. We cannot read that setting yet, so it is a manual option.
-            if (CONFIG.DOUBLE_SIDED) {
-                const singleNames = [];
-                mats.forEach((m, mi) => {
-                    const cv = matsFlat[mi] ? matsFlat[mi].__cull : undefined;   // 1029 (GL_BACK) = Single Sided ON, 0 = OFF
-                    const on = !(cv === undefined || cv === null || cv === 0 || cv === false || /^(none|0|false|off)?$/i.test(String(cv)));
-                    if (CONFIG.DOUBLE_SIDED_AUTO && on) { singleNames.push(m.name); return; }
-                    m.doubleSided = true;
-                });
-                log('materials marked doubleSided: ' + (mats.length - singleNames.length) + ' of ' + mats.length +
-                    (singleNames.length ? ` (single sided in the viewer: ${singleNames.join(', ')})` : ''));
-            }
+            finishMaterials(mats, matsChannelInfo, matsFlat, matHasUV, pool);
 
             // ---- animation clips (multi-clip aware) ----
-            const mlA = document.getElementsByClassName('model-name__label')[0];
-            const animBase = mlA ? mlA.textContent.trim().replace(/\.+$/, '') : 'model';
-            let clipSets = [];
-            if (window.clips && window.clips.length > 1) {
-                window.clips.forEach((c) => {
-                    if (c && c.frames && c.frames.length > 1) {
-                        clipSets.push({ name: c.name, frames: c.frames });
-                    }
-                });
-            }
-            if (clipSets.length > 1) {
-                log(`export: multi-clip mode, clips=${clipSets.length}`);
-            } else {
-                // single-clip path: same data source and behaviour as before
-                clipSets = (window.recordedFrames.length > 1)
-                    ? [{ name: `${animBase}_anim`, frames: window.recordedFrames }] : [];
-            }
+            const clipSets = collectClipSets();
             const hasFrames = clipSets.length > 0;
             const liveSnap = hasFrames ? null : snapshotFrame().meshes;
             const gltfSkins = [];
@@ -4021,32 +3498,10 @@
                 const tFirst = cs.frames[0].time;
                 const times = cs.frames.map((f) => Math.fround(f.time - tFirst));
                 // The time accessor is created on first use, so a clip without motion adds no unused data.
-                let tAcc = -1;
                 const trk = { name: cs.name, frames: cs.frames, times, samplers: [], channels: [] };
-                Object.defineProperty(trk, 'timeAcc', {
-                    enumerable: true,
-                    get: () => {
-                        if (tAcc < 0) {
-                            const tV = addBV(new Float32Array(times));
-                            tAcc = accs.length;
-                            accs.push({ bufferView: tV, componentType: 5126, count: times.length,
-                                        type: 'SCALAR', min: [times[0]], max: [times[times.length - 1]] });
-                        }
-                        return tAcc;
-                    }
-                });
+                Object.defineProperty(trk, 'timeAcc', { enumerable: true, get: lazyTimeAcc(times) });
                 return trk;
             });
-
-            function expandMat3x4(pal, boneIdx) {
-                const b = boneIdx * 12;
-                return [
-                    pal[b + 0], pal[b + 4], pal[b + 8], 0,
-                    pal[b + 1], pal[b + 5], pal[b + 9], 0,
-                    pal[b + 2], pal[b + 6], pal[b + 10], 0,
-                    pal[b + 3], pal[b + 7], pal[b + 11], 1
-                ];
-            }
 
             let staticWarned = false;
             allNodes.forEach((obj, mIdx) => {
@@ -4095,7 +3550,7 @@
                     }
                     if (!rigFail) rig = rigInfo;
                 }
-                const jointMat = rig ? ((pal, jx) => rigLocals(rig, pal)[jx]) : expandMat3x4;
+                const jointMat = rig ? ((pal, jx) => rigLocals(rig, pal)[jx]) : palMat4;
                 if (rig) {
                     const nRoots = rig.parent.filter((p) => p < 0).length;
                     log(`skin ${gltfSkins.length}: bone hierarchy, ${jointCount} bones, ${nRoots} root(s), palette check ${rig.check.toExponential(1)}`);
@@ -4226,16 +3681,17 @@
                         }
                         return false;
                     };
-                    // Rest pose palette, chosen as in the rest pose code below (without its log lines).
-                    const smE = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
-                    const restPalE = (CONFIG.REST_POSE_SOURCE === 'static' && smE && smE.palette &&
-                                    smE.palette.length >= paletteRef.palette.length) ? smE.palette : paletteRef.palette;
+                    // Rest pose palette: the viewer's Static Pose snapshot (REST_POSE_SOURCE 'static') when
+                    // it is usable, else the first frame of the first clip. Also used for the joint defaults below.
+                    const sm = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
+                    const staticOk = !!(sm && sm.palette && sm.palette.length >= paletteRef.palette.length);
+                    const restPal = (CONFIG.REST_POSE_SOURCE === 'static' && staticOk) ? sm.palette : paletteRef.palette;
                     // A joint that does not move in a clip but is held away from the rest pose needs a constant
                     // pose in that clip. Without it, a glTF player shows the rest pose for that joint.
                     const jointDiffersFromRest = (jx, cx) => {
                         const f0 = tracks[cx].frames[0].meshes[mIdx], p0 = f0 && f0.palette;
-                        if (!p0 || p0.length < (jx + 1) * 12 || restPalE.length < (jx + 1) * 12) return false;
-                        const a = jointMat(p0, jx), b = jointMat(restPalE, jx);
+                        if (!p0 || p0.length < (jx + 1) * 12 || restPal.length < (jx + 1) * 12) return false;
+                        const a = jointMat(p0, jx), b = jointMat(restPal, jx);
                         for (let dv = 0; dv < 16; dv++) {
                             if (Math.abs(a[dv] - b[dv]) > 1e-5 * Math.max(1, Math.abs(b[dv]))) return true;
                         }
@@ -4276,7 +3732,7 @@
                             const tr = tracks[ci];
                             const useN = poseOnly ? 1 : tr.frames.length;
                             let T = [], R = [], S = [], RV = [];
-                            let prevQ = null, prevQV = null, prevV = null;   // hemisphere fix resets per clip, per joint
+                            let prevQ = null, prevQV = null;   // hemisphere fix resets per clip, per joint
                             const tgtTRS = shearJ[jn] ? makeHelper(jn) : nIdx;   // sheared joint: T/R/S go on the helper
                             let svdSeq = null;
                             if (shearJ[jn]) {
@@ -4304,16 +3760,7 @@
                                     continue;
                                 }
                                 const d = decomposeMat4(mPal);
-                                if (prevQ) {
-                                    const dot = d.rotation[0]*prevQ[0] + d.rotation[1]*prevQ[1]
-                                            + d.rotation[2]*prevQ[2] + d.rotation[3]*prevQ[3];
-                                    if (dot < 0) {
-                                        d.rotation[0] = -d.rotation[0];
-                                        d.rotation[1] = -d.rotation[1];
-                                        d.rotation[2] = -d.rotation[2];
-                                        d.rotation[3] = -d.rotation[3];
-                                    }
-                                }
+                                d.rotation = _quatCont(d.rotation, prevQ);   // same hemisphere as the previous key
                                 prevQ = d.rotation.slice();
                                 T.push(d.translation[0], d.translation[1], d.translation[2]);
                                 R.push(d.rotation[0], d.rotation[1], d.rotation[2], d.rotation[3]);
@@ -4379,9 +3826,6 @@
                     // Rest pose source: the first frame of the first clip, or the viewer's
                     // Static Pose snapshot (REST_POSE_SOURCE). Static falls back to the clip
                     // frame when no usable snapshot exists (e.g. single-clip RECORD).
-                    let restPal = paletteRef.palette;
-                    const sm = window.staticPoseSnapshot && window.staticPoseSnapshot.meshes[mIdx];
-                    const staticOk = !!(sm && sm.palette && sm.palette.length >= paletteRef.palette.length);
                     if (staticOk) {
                         let diffJ = 0;
                         for (let dj = 0; dj < jointCount; dj++) {
@@ -4394,12 +3838,9 @@
                         log('rest pose: mesh ' + mIdx + ' Static Pose vs clip frame 0 differ on ' +
                             diffJ + '/' + jointCount + ' joints');
                     }
-                    if (CONFIG.REST_POSE_SOURCE === 'static') {
-                        if (staticOk) restPal = sm.palette;
-                        else if (!staticWarned) {
-                            staticWarned = true;   // once per export, not once per mesh
-                            warn('rest pose: Static Pose snapshot unavailable (run RECORD ALL CLIPS first); using clip frame 0');
-                        }
+                    if (CONFIG.REST_POSE_SOURCE === 'static' && !staticOk && !staticWarned) {
+                        staticWarned = true;   // once per export, not once per mesh
+                        warn('rest pose: Static Pose snapshot unavailable (run RECORD ALL CLIPS first); using clip frame 0');
                     }
                     log('rest pose source: ' + (restPal === paletteRef.palette ? 'clip frame 0' : 'Static Pose') +
                         ' (mesh ' + mIdx + ')');
@@ -4458,14 +3899,7 @@
                 let T = [], R = [], S = [], prevQ = null;
                 for (let fi4 = 0; fi4 < tr.frames.length; fi4++) {
                     const d4 = decomposeMat4(matAt(fi4));
-                    if (prevQ) {
-                        const dot4 = d4.rotation[0]*prevQ[0] + d4.rotation[1]*prevQ[1]
-                                 + d4.rotation[2]*prevQ[2] + d4.rotation[3]*prevQ[3];
-                        if (dot4 < 0) {
-                            d4.rotation[0] = -d4.rotation[0]; d4.rotation[1] = -d4.rotation[1];
-                            d4.rotation[2] = -d4.rotation[2]; d4.rotation[3] = -d4.rotation[3];
-                        }
-                    }
+                    d4.rotation = _quatCont(d4.rotation, prevQ);   // same hemisphere as the previous key
                     prevQ = d4.rotation.slice();
                     T.push(d4.translation[0], d4.translation[1], d4.translation[2]);
                     R.push(d4.rotation[0], d4.rotation[1], d4.rotation[2], d4.rotation[3]);
@@ -4631,8 +4065,12 @@
                 if (n.children && n.children.length === 0) delete n.children;
             });
 
+            // With "Vertex color sRGB>linear" off, COLOR_0 holds the viewer's sRGB values as they are.
+            // The flag tells FbxWriter (and anyone reading the file) not to encode them again.
+            const asset = { version: '2.0' };
+            if (!CONFIG.VERTEX_COLOR_SRGB) asset.extras = { vertexColorSpace: 'srgb' };
             const gltf = {
-                asset: { version: '2.0' },
+                asset,
                 scene: 0,
                 scenes: [{ nodes: rootNodes }],
                 nodes,
@@ -4642,29 +4080,9 @@
                 materials: mats,
                 buffers: [{ byteLength: off }]
             };
-            // Drop textures no material references (captured env/matcap/leftover images) and remap indices.
-            const texUsed = {}, texNew = {}, keptImages = [], keptTextures = [], zipTex = {};
-            function markTex(o) { if (o && typeof o.index === 'number') texUsed[o.index] = true; }
-            mats.forEach((m) => {
-                const pb = m.pbrMetallicRoughness || {};
-                markTex(pb.baseColorTexture); markTex(pb.metallicRoughnessTexture);
-                markTex(m.normalTexture); markTex(m.occlusionTexture); markTex(m.emissiveTexture);
-            });
-            for (let ti2 = 0; ti2 < textures.length; ti2++) {
-                if (!texUsed[ti2]) continue;
-                texNew[ti2] = keptTextures.length;
-                keptImages.push({ uri: images[textures[ti2].source].uri });
-                keptTextures.push({ source: keptImages.length - 1 });
-                zipTex[imageKeys[textures[ti2].source].key] = imageKeys[textures[ti2].source].safe;
-            }
-            function remapTex(o) { if (o && typeof o.index === 'number') o.index = texNew[o.index]; }
-            mats.forEach((m) => {
-                const pb = m.pbrMetallicRoughness || {};
-                remapTex(pb.baseColorTexture); remapTex(pb.metallicRoughnessTexture);
-                remapTex(m.normalTexture); remapTex(m.occlusionTexture); remapTex(m.emissiveTexture);
-            });
-            if (keptTextures.length !== textures.length) log(`textures: ${keptTextures.length} used, ${textures.length - keptTextures.length} unused dropped`);
-            images = keptImages; textures = keptTextures;
+            // Drop textures no material references (captured env/matcap/leftover images), see pruneUnusedTextures.
+            const pruned = pruneUnusedTextures(mats, images, textures, imageKeys), zipTex = pruned.zipTex;
+            images = pruned.images; textures = pruned.textures;
             // glTF forbids empty arrays (validator: EMPTY_ENTITY), so texture-less models omit these.
             if (images.length) gltf.images = images;
             if (textures.length) gltf.textures = textures;
@@ -4677,40 +4095,552 @@
                 `animClips=${animations ? animations.length : 0}`,
                 `animFrames=${animations ? tracks[0].times.length : 0}`);
 
-            const jsonStr = JSON.stringify(gltf);
-            const jsonBytes = new TextEncoder().encode(jsonStr);
-            const jAl = pad(jsonBytes.byteLength), jPad = jAl - jsonBytes.byteLength;
             let binAll = new Uint8Array(off), binPos = 0;
             for (let bc = 0; bc < binChunks.length; bc++) {
                 binAll.set(binChunks[bc], binPos);
                 binPos += binChunks[bc].length;
             }
-            const bin = binAll.buffer;
-            const bAl = pad(bin.byteLength), bPad = bAl - bin.byteLength;
-            const total = 12 + 8 + jAl + 8 + bAl;
+            binChunks.length = 0;   // the joined copy is the only one kept
+            const modelName = modelBaseName().replace(/[\\\/:*?"<>|]/g, '_') || 'model';
+            if (skipGlb) return { glb: null, gltf, bin: binAll, zipTex, modelName };
 
-            const glb = new ArrayBuffer(total);
-            let dv = new DataView(glb), o = 0;
-            dv.setUint32(o, 0x46546C67, true); o += 4;
-            dv.setUint32(o, 2, true); o += 4;
-            dv.setUint32(o, total, true); o += 4;
-            dv.setUint32(o, jAl, true); o += 4;
-            dv.setUint32(o, 0x4E4F534A, true); o += 4;
-            new Uint8Array(glb, o, jsonBytes.length).set(jsonBytes); o += jsonBytes.length;
-            for (let k1 = 0; k1 < jPad; k1++) new Uint8Array(glb, o + k1, 1)[0] = 0x20;
-            o += jPad;
-            dv.setUint32(o, bAl, true); o += 4;
-            dv.setUint32(o, 0x004E4942, true); o += 4;
-            new Uint8Array(glb, o, bin.byteLength).set(new Uint8Array(bin)); o += bin.byteLength;
-            for (let k2 = 0; k2 < bPad; k2++) new Uint8Array(glb, o + k2, 1)[0] = 0;
+            const glb = packGlb(gltf, binAll);
 
-            const ml2 = document.getElementsByClassName('model-name__label')[0];
-            const modelName = (ml2 ? ml2.textContent.trim().replace(/\.+$/, '') : 'model').replace(/[\\\/:*?"<>|]/g, '_') || 'model';
             return { glb, gltf, bin: binAll, zipTex, modelName };
         } catch (e) {
             e.message = 'scene build failed: ' + e.message;
             throw e;
         }
+    }
+
+    // ====================================================================
+    // Export: GLB and FBX downloads
+    // ====================================================================
+    // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
+    function downloadGLB(format) {
+        format = format === 'fbx' ? 'fbx' : 'glb';
+        if (_exporting) { warn('export already running, ignored'); return; }
+        if (window.animationRecording || window.clipRecording) { warn('recording is still running: press STOP first (export would miss the animation)'); return; }
+        _exporting = true;
+        log(`export started (${format.toUpperCase()})`);
+        logViewerCapabilities();
+        const stages = format === 'fbx'
+            ? ['stage_textures', 'stage_merge', 'stage_build', 'stage_fbx', 'stage_split', 'stage_zip']
+            : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
+        const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
+        stage(0);
+        waitForTextures((got, total, left) => {
+            if (!total) progSub(1, i18n('pr_no_textures'));
+            else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
+            else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
+        })
+            .then(() => {
+                stage(1);
+                // two parts: metal/rough maps, then opacity into base colour alpha
+                return mergeMRTextures((d, n) => progSub(n ? 0.5 * d / n : 0.5, n ? i18n('pr_mr', { d, n }) : i18n('pr_no_mr')), format === 'fbx');
+            })
+            .then(() => mergeOpacityTextures((d, n) => progSub(n ? 0.5 + 0.5 * d / n : 1, n ? i18n('pr_op', { d, n }) : i18n('pr_no_op'))))
+            .then(() => { stage(2); progSub(-1, i18n('pr_building')); return nextPaint(); })
+            .then(() => {
+                const built = _downloadGLBSync(format === 'fbx');
+                if (format === 'glb') return packZip(built, { [`${built.modelName}.glb`]: new Blob([built.glb], { type: 'application/octet-stream' }) }, stage, 3);
+                return exportFBX(built, stage);
+            })
+            .then(() => { _exporting = false; progDone(i18n('pr_done')); })
+            .catch((e) => {
+                _exporting = false;
+                progDone(i18n('pr_export_failed'), true);
+                err('export failed:', e.message, e.stack);
+            });
+    }
+
+    // One line that says which private viewer fields were found. The export reads them
+    // through && chains that give "nothing" when a field is gone, so after a viewer update
+    // this line in a bug report shows what disappeared.
+    function logViewerCapabilities() {
+        try {
+            const all = window.allmodel || [];
+            let rig = 0, pal = 0, matModel = 0, chMap = 0, morph = 0;
+            all.forEach((obj) => {
+                const impl = obj && obj._rigTransformImplementation;
+                if (impl) { rig++; if (impl._skinningAttribute && impl._skinningAttribute._matrixPalette) pal++; }
+                const ch = getMaterialChannels(obj);
+                if (ch) { matModel++; if (ch.__map) chMap++; }
+                try { if (morphTargetCount(obj)) morph++; } catch (e) {}
+            });
+            const mgr = findAnimationManager();
+            let speed = '';
+            if (mgr) { try { speed = `, speed x${typeof mgr.getTimeFactor === 'function' ? mgr.getTimeFactor() : mgr._timeFactor}`; } catch (e) {} }
+            log(`viewer: meshes ${all.length}, skinned ${rig} (palette ${pal}/${rig}), morph ${morph}, ` +
+                `material model ${matModel}/${all.length} (channel map ${chMap}/${matModel}), textures seen ${Object.keys(saveimagecache2).length}, ` +
+                `clip manager ${mgr ? `yes (${getClipCount()} clips, ${getClipItems().length} list items${speed})` : 'no'}, ` +
+                `model name label ${document.getElementsByClassName('model-name__label').length ? 'yes' : 'no'}`);
+        } catch (e) { warn('viewer capability check failed:', e.message); }
+    }
+
+    // Lets the panel paint before a long synchronous step. A hidden tab never fires
+    // requestAnimationFrame, so a timer also resolves it (the export must not stall there).
+    function nextPaint() {
+        return new Promise((r) => {
+            let done = false;
+            const go = () => { if (!done) { done = true; setTimeout(r, 0); } };
+            requestAnimationFrame(go);
+            setTimeout(go, 100);
+        });
+    }
+
+    // Zips the model file(s) with the captured textures. extra: { path: Blob }.
+    function packZip(built, files, stage, stageIdx) {
+        stage(stageIdx);
+        const zip = new JSZip();
+        Object.keys(files).forEach((fp) => zip.file(fp, files[fp]));
+        for (const tn in built.zipTex) {
+            if (built.zipTex.hasOwnProperty(tn) && objects[tn]) {
+                if (built.skipTex && built.skipTex[`textures/${built.zipTex[tn]}`]) continue;
+                zip.file(`textures/${built.zipTex[tn]}`, objects[tn], { compression: 'STORE' });   // PNG/JPEG are already compressed
+            }
+        }
+        (built.extraTex || []).forEach((t) => zip.file(t.path, t.blob, { compression: 'STORE' }));
+        return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+            (meta) => progSub(meta.percent / 100, `${Math.round(meta.percent)}%`)).then((content) => {
+            saveAs(content, `${built.modelName}.zip`);
+            log('export done:', `${built.modelName}.zip`);
+        }).catch((e) => { throw new Error('zip failed: ' + e.message); });
+    }
+
+    // zlib deflate for compressed FBX arrays (CompressionStream 'deflate' = zlib format)
+    function zlibDeflate(u8) {
+        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
+        const cs = new CompressionStream('deflate');
+        const out = new Response(cs.readable).arrayBuffer().then((b) => new Uint8Array(b));
+        const w = cs.writable.getWriter();
+        // A failure is reported through `out` (FbxWriter then writes the array uncompressed);
+        // catch these two so the browser does not also log "Uncaught (in promise)".
+        w.write(u8).catch(() => {}); w.close().catch(() => {});
+        return out;
+    }
+
+    // One channel of an image as a grayscale PNG (FBX has no packed metal/rough map).
+    function splitChannel(blob, channel) {
+        return createImageBitmap(blob).then((bmp) => {
+            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+            if (bmp.close) bmp.close();   // release the bitmap memory early
+            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data, k = { R: 0, G: 1, B: 2 }[channel];
+            for (let i = 0; i < d.length; i += 4) { const v = d[i + k]; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
+            cx.putImageData(id, 0, 0);
+            return new Promise((res) => c.toBlob((b) => { c.width = 0; res(b); }, 'image/png'));
+        });
+    }
+
+    // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
+    function fbxLabel(label) {
+        const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
+        if (!m) return label;
+        const key = 'fbx_' + m[1].replace(/ /g, '_') + (m[2] ? '_n' : '');
+        return (STRINGS.en[key] !== undefined) ? i18n(key, { i: m[2], n: m[3] }) : label;
+    }
+
+    function exportFBX(built, stage) {
+        stage(3);
+        const fps = +CONFIG.RECORD_FPS > 0 ? +CONFIG.RECORD_FPS : 30;
+        return FbxWriter.gltfToFbx(built.gltf, built.bin, {
+            creator: `Sketchfab Ripper ${typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : ''}`.trim(),
+            fps: [24, 25, 30, 48, 50, 60].indexOf(fps) >= 0 ? fps : 30,
+            deflate: zlibDeflate,
+            onProgress: (f, label) => progSub(f, fbxLabel(label)),
+        }).then((res) => {
+            res.warnings.forEach((w) => warn('fbx: ' + w));
+            const st = res.stats;
+            log(`fbx written: ${(res.fbx.byteLength / 1048576).toFixed(1)} MB, models=${st.models} geometries=${st.geometries} materials=${st.materials} textures=${st.textures} clusters=${st.clusters} clips=${st.stacks} curves=${st.curves}`);
+            stage(4);
+            const byUri = {};
+            for (const tn in built.zipTex) if (built.zipTex.hasOwnProperty(tn) && objects[tn]) byUri[`textures/${built.zipTex[tn]}`] = objects[tn];
+            built.extraTex = [];
+            built.skipTex = {};
+            let n = 0;
+            return res.splits.reduce((p, sp) => p.then(() => {
+                progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
+                const src = byUri[sp.src];
+                if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
+                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
+                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
+            }), Promise.resolve()).then(() => {
+                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
+                return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
+            });
+        });
+    }
+
+    // ====================================================================
+    // UI panel: progress bars, buttons, settings
+    // ====================================================================
+    // Progress bars: stage (k of n) and sub-stage.
+    let _progHideTimer = null;
+    function progStage(k, n, label) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        clearTimeout(_progHideTimer);
+        box.style.display = 'flex';
+        box.classList.remove('rp-err');
+        document.getElementById('rp-stage-fill').style.width = `${Math.round(100 * k / n)}%`;
+        document.getElementById('rp-stage-label').textContent = `${k}/${n} ${label}`;
+        progSub(0, '');
+    }
+    // frac < 0: work without a measurable fraction (striped bar)
+    function progSub(frac, label) {
+        const fill = document.getElementById('rp-sub-fill');
+        if (!fill) return;
+        const busy = frac < 0;
+        fill.classList.toggle('rp-busy', busy);
+        fill.style.width = busy ? '100%' : `${Math.round(100 * Math.max(0, Math.min(1, frac)))}%`;
+        const l = document.getElementById('rp-sub-label');
+        if (l) l.textContent = label || '';
+    }
+    function progDone(label, isErr) {
+        const box = document.getElementById('ripper-progress');
+        if (!box) return;
+        box.classList.toggle('rp-err', !!isErr);
+        document.getElementById('rp-stage-fill').style.width = '100%';
+        document.getElementById('rp-stage-label').textContent = label;
+        progSub(1, isErr ? i18n('pr_see_console') : '');
+        clearTimeout(_progHideTimer);
+        _progHideTimer = setTimeout(() => { box.style.display = 'none'; }, isErr ? 8000 : 3000);
+    }
+
+    // ---- settings form: one row = label (tooltip from <key>_tip) + control ----
+    function settingRow(parent, labelKey, control) {
+        const row = document.createElement('div');
+        row.className = 'rp-set';
+        const label = document.createElement('span');
+        label.textContent = i18n(labelKey);
+        label.title = i18n(`${labelKey}_tip`);
+        row.appendChild(label);
+        row.appendChild(control);
+        parent.appendChild(row);
+        return control;
+    }
+    // A text or number field in the settings (styled by .rp-field).
+    function settingField(el, width) {
+        el.className = 'rp-field';
+        if (width) el.style.width = width;
+        return el;
+    }
+    // A checkbox bound to CONFIG[cfgKey]: saved and logged on change.
+    function checkSetting(parent, cfgKey, labelKey, logName) {
+        const c = document.createElement('input');
+        c.type = 'checkbox';
+        c.checked = !!CONFIG[cfgKey];
+        c.addEventListener('change', () => {
+            CONFIG[cfgKey] = c.checked;
+            saveConfig();
+            log(`${logName} set to ${c.checked}`);
+        });
+        return settingRow(parent, labelKey, c);
+    }
+    // A select with options [[value, text], ...]; current is the selected value. onChange(value as string).
+    function selectSetting(parent, labelKey, options, current, onChange) {
+        const sel = document.createElement('select');
+        options.forEach((o) => {
+            const op = document.createElement('option');
+            op.value = String(o[0]); op.textContent = o[1];
+            if (current === o[0]) op.selected = true;
+            sel.appendChild(op);
+        });
+        sel.addEventListener('change', () => onChange(sel.value));
+        return settingRow(parent, labelKey, sel);
+    }
+
+    // Builds the panel again (after a language change), at the same place.
+    let _panelTimers = [];
+    function rebuildPanel(keepOpen) {
+        const old = document.getElementById('ripper-panel');
+        const pos = old ? { left: old.style.left, top: old.style.top, right: old.style.right } : null;
+        _panelTimers.forEach(clearInterval); _panelTimers = [];
+        if (old) old.remove();
+        button_dw = false;
+        addbtnfunc(true, keepOpen, pos);
+    }
+
+    function addbtnfunc(rebuilt, keepOpen, keepPos) {
+        if (button_dw) return;
+        if (!document.body) { setTimeout(addbtnfunc, 500); return; }
+        if (document.getElementById('ripper-panel')) { button_dw = true; return; }
+
+        if (!document.getElementById('ripper-style')) {
+            const css = document.createElement('style');
+            css.id = 'ripper-style';
+            css.textContent = [
+                '#ripper-panel{position:fixed;top:70px;right:16px;z-index:2147483647;width:212px;box-sizing:border-box;background:rgba(24,25,28,.94);',
+                'backdrop-filter:blur(6px);border:1px solid #3a3d42;border-radius:12px;padding:10px;font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;',
+                'color:#e8eaed;display:flex;flex-direction:column;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.55)}',
+                '#ripper-panel .rp-head{display:flex;align-items:center;gap:6px;padding-bottom:6px;border-bottom:1px solid #3a3d42}',
+                '#ripper-panel .rp-title{flex:1;font-weight:700;letter-spacing:.06em;font-size:11px;color:#ff9f43;cursor:move;user-select:none}',
+                '#ripper-panel .rp-gear{cursor:pointer;color:#9aa0a6;font-size:15px;line-height:1;padding:2px 4px;border-radius:6px;user-select:none}',
+                '#ripper-panel .rp-gear:hover{background:#2f3236;color:#fff}',
+                '#ripper-panel .rp-sec{font-size:10px;font-weight:600;letter-spacing:.08em;color:#9aa0a6;text-transform:uppercase;margin-top:2px}',
+                '#ripper-panel .rp-row{display:flex;gap:6px}',
+                '#ripper-panel .rp-btn{flex:1;padding:8px 6px;border:0;border-radius:8px;color:#fff;font:600 11px system-ui,sans-serif;letter-spacing:.03em;cursor:pointer;',
+                'transition:background-color .15s,opacity .15s,transform .05s}',
+                '#ripper-panel .rp-btn:active{transform:translateY(1px)}',
+                '#ripper-panel .rp-dl{background:#1a73e8}#ripper-panel .rp-dl:hover{background:#1765cc}',
+                '#ripper-panel .rp-rec{background:#c5221f}#ripper-panel .rp-rec:hover{background:#a50e0e}',
+                '#ripper-panel .rp-rec.rp-on{background:#f28b82;color:#3c0a08}',
+                '#ripper-panel .rp-btn:disabled{background:#3c4043;color:#80868b;cursor:not-allowed;transform:none}',
+                '#ripper-progress{display:none;flex-direction:column;gap:4px;padding:6px 0 2px}',
+                '#ripper-progress .rp-lab{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#bdc1c6;overflow-wrap:anywhere}',
+                '#ripper-progress .rp-bar{height:6px;border-radius:3px;background:#3c4043;overflow:hidden}',
+                '#ripper-progress .rp-bar.rp-thin{height:4px}',
+                '#ripper-progress .rp-fill{height:100%;width:0;border-radius:3px;background:#8ab4f8;transition:width .2s}',
+                '#ripper-progress .rp-thin .rp-fill{background:#5f9cf0}',
+                '#ripper-progress .rp-fill.rp-busy{background:repeating-linear-gradient(45deg,#5f9cf0 0 8px,#3c6fc2 8px 16px);background-size:22px 22px;animation:rp-stripe .7s linear infinite}',
+                '@keyframes rp-stripe{to{background-position:22px 0}}',
+                '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
+                '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
+                '#ripper-panel.rp-wide{width:270px}',
+                '#ripper-config>div>span{flex:1;min-width:0}',
+                '#ripper-config select{max-width:55%}',
+                '#ripper-config .rp-set{display:flex;justify-content:space-between;align-items:center;gap:6px}',
+                '#ripper-config input[type=checkbox]{background:#202124;color:#e8eaed;border:1px solid #5f6368;border-radius:5px;padding:2px 4px;font:11px system-ui,sans-serif}',
+                '#ripper-config select,#ripper-config .rp-field{background:#222;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 4px;font:11px monospace}',
+            ].join('');
+            document.head.appendChild(css);
+        }
+
+        const panel = document.createElement('div');
+        panel.id = 'ripper-panel';
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'rp-head';
+
+        const title = document.createElement('div');
+        title.textContent = 'MODEL RIPPER';   // i18n-ok (name of the script)
+        title.className = 'rp-title';
+        titleRow.appendChild(title);
+
+        const gear = document.createElement('span');
+        gear.textContent = '⚙';
+        gear.title = i18n('settings');
+        gear.className = 'rp-gear';
+        titleRow.appendChild(gear);
+
+        panel.appendChild(titleRow);
+
+        function section(text) {
+            const d = document.createElement('div');
+            d.className = 'rp-sec'; d.textContent = text;
+            panel.appendChild(d);
+        }
+        function button(id, text, cls, onClick) {
+            const b = document.createElement('button');
+            if (id) b.id = id;
+            b.type = 'button';
+            b.className = `rp-btn ${cls}`;
+            b.textContent = text;
+            b.addEventListener('click', onClick);
+            return b;
+        }
+
+        section(i18n('sec_download'));
+        const dlRow = document.createElement('div');
+        dlRow.className = 'rp-row';
+        const btnDL = button('dlGlbBtn', i18n('btn_glb'), 'rp-dl', () => { downloadGLB('glb'); });
+        btnDL.title = i18n('tip_glb');
+        const btnFBX = button('dlFbxBtn', i18n('btn_fbx'), 'rp-dl', () => { downloadGLB('fbx'); });
+        btnFBX.title = i18n('tip_fbx');
+        dlRow.appendChild(btnDL);
+        dlRow.appendChild(btnFBX);
+        panel.appendChild(dlRow);
+
+        section(i18n('sec_animation'));
+        const btnRec = button('recBtnLabel', window.animationRecording ? i18n('btn_stop') : i18n('btn_rec_single'), 'rp-rec', () => {
+            if (!window.animationRecording) startRecording(); else stopRecording();
+        });
+        panel.appendChild(btnRec);
+
+        const btnAll = button('recAllBtn', window.clipRecording ? i18n('btn_cancel') : i18n('btn_rec_all'), 'rp-rec', () => {
+            if (window.clipRecording) {
+                window.clipCancel = true;
+                setRecAllLabel(i18n('btn_cancelling'));
+                log('record-all: cancel requested');
+                return;
+            }
+            recordAllClips();
+        });
+        panel.appendChild(btnAll);
+
+        const progBox = document.createElement('div');
+        progBox.id = 'ripper-progress';
+        progBox.innerHTML = '<div class="rp-lab"><span id="rp-stage-label"></span></div>'
+            + '<div class="rp-bar"><div class="rp-fill" id="rp-stage-fill"></div></div>'
+            + '<div class="rp-bar rp-thin"><div class="rp-fill" id="rp-sub-fill"></div></div>'
+            + '<div class="rp-lab"><span id="rp-sub-label"></span></div>';
+        panel.appendChild(progBox);
+
+        // Buttons that can't do anything right now are greyed out:
+        // RECORD SINGLE CLIP needs 1+ clips, RECORD ALL CLIPS needs 2+, downloads wait for recordings.
+        function setOff(b, off, why) {
+            b.disabled = off;
+            b.title = off ? why : (b.dataset.tip || '');
+        }
+        btnDL.dataset.tip = btnDL.title; btnFBX.dataset.tip = btnFBX.title;
+        function refreshAllBtn() {
+            let n = 0;
+            try { n = getClipCount(); } catch (e) {}
+            const recBusy = window.animationRecording || window.clipRecording;
+            btnRec.classList.toggle('rp-on', !!window.animationRecording);
+            btnAll.classList.toggle('rp-on', !!window.clipRecording);
+            if (!window.animationRecording) setOff(btnRec, n < 1 || !!window.clipRecording || _exporting, n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            if (!window.clipRecording) setOff(btnAll, n < 2 || !!window.animationRecording || _exporting, n === 1 ? i18n('tip_one_clip') : n < 1 ? i18n('tip_no_clips') : i18n('tip_busy'));
+            setOff(btnDL, recBusy || _exporting, i18n('tip_busy_dl'));
+            setOff(btnFBX, recBusy || _exporting, i18n('tip_busy_dl'));
+        }
+        refreshAllBtn();
+        _panelTimers.push(setInterval(refreshAllBtn, 500));
+
+        const status = document.createElement('div');
+        status.id = 'ripper-status';
+        status.textContent = i18n('st_idle');
+        panel.appendChild(status);
+
+        // ---- config form (hidden until gear clicked) ----
+        const configDiv = document.createElement('div');
+        configDiv.id = 'ripper-config';
+        configDiv.style.cssText = 'display:none;flex-direction:column;gap:5px;padding-top:6px;border-top:1px solid #3a3d42;font-size:11px;';
+
+        const cfgSaved = (msg) => { saveConfig(); log(msg); };
+        selectSetting(configDiv, 'set_language',
+            [['auto', i18n('opt_auto')]].concat(Object.keys(STRINGS).map((k) => [k, LANG_NAMES[k] || k])), CONFIG.LANGUAGE || 'auto', (v) => {
+                CONFIG.LANGUAGE = v;
+                cfgSaved(`language set to ${v} (${uiLang()})`);
+                rebuildPanel(true);
+            });
+
+        const input1 = settingField(document.createElement('input'), '52px');
+        input1.type = 'number';
+        input1.min = '1';
+        input1.max = '60';
+        input1.value = CONFIG.MAX_RECORD_SECONDS;
+        input1.addEventListener('change', () => {
+            let v = parseInt(input1.value, 10);
+            if (isNaN(v) || v < 1) v = 1;
+            if (v > 60) v = 60;
+            input1.value = v;
+            CONFIG.MAX_RECORD_SECONDS = v;
+            cfgSaved(`max record seconds set to ${v}`);
+        });
+        settingRow(configDiv, 'set_max_seconds', input1);
+
+        selectSetting(configDiv, 'set_fps', [[0, i18n('opt_fps_max')], [60, '60'], [30, '30'], [24, '24'], [15, '15']], +CONFIG.RECORD_FPS || 0, (v) => {
+            CONFIG.RECORD_FPS = parseInt(v, 10) || 0;
+            cfgSaved(`record fps set to ${CONFIG.RECORD_FPS || 'every frame'}`);
+        });
+
+        checkSetting(configDiv, 'AUTO_RELOAD_ON_FAILURE', 'set_reload', 'auto-reload on failure');
+        checkSetting(configDiv, 'DOUBLE_SIDED', 'set_double', 'double sided');
+        checkSetting(configDiv, 'DOUBLE_SIDED_AUTO', 'set_single_auto', 'auto single sided');
+        checkSetting(configDiv, 'DROP_STRIP_SLIVERS', 'set_slivers', 'drop strip slivers');
+        checkSetting(configDiv, 'REDUCE_KEYS', 'set_reduce', 'reduce keyframes');
+        checkSetting(configDiv, 'KEEP_STILL_CLIPS', 'set_still', 'keep still clips');
+        checkSetting(configDiv, 'VERTEX_COLOR_SRGB', 'set_vcolor', 'vertex color sRGB->linear');
+        checkSetting(configDiv, 'FLAT_MR_FROM_VIEWER', 'set_flat_mr', 'flat metal/rough from viewer');
+
+        // text, not type=number: a number field rejects "0,01" in some browsers and languages
+        const input8 = settingField(document.createElement('input'), '64px');
+        input8.type = 'text';
+        input8.inputMode = 'decimal';
+        const decSep = (1.5).toLocaleString(uiLang()).charAt(1) === ',' ? ',' : '.';   // show 0,01 in languages that write a comma
+        const showNum = (v) => String(v).replace('.', decSep);
+        input8.value = showNum(CONFIG.EXPORT_SCALE);
+        input8.addEventListener('change', () => {
+            let v = parseFloat(String(input8.value).trim().replace(',', '.'));
+            if (isNaN(v) || v <= 0) v = 1;
+            input8.value = showNum(v);
+            CONFIG.EXPORT_SCALE = v;
+            cfgSaved(`export scale set to ${v}`);
+        });
+        settingRow(configDiv, 'set_scale', input8);
+
+        selectSetting(configDiv, 'set_mr_format', [['jpeg', i18n('opt_jpeg')], ['png', i18n('opt_png')]], CONFIG.MR_TEXTURE_FORMAT, (v) => {
+            CONFIG.MR_TEXTURE_FORMAT = v;
+            cfgSaved(`metal/rough texture format set to ${v}`);
+        });
+        selectSetting(configDiv, 'set_rest', [['clip0', i18n('opt_clip0')], ['static', i18n('opt_static')]], CONFIG.REST_POSE_SOURCE, (v) => {
+            CONFIG.REST_POSE_SOURCE = v;
+            cfgSaved(`rest pose source set to ${v}`);
+        });
+
+        panel.appendChild(configDiv);
+
+        // The settings need more room (longer labels in some languages): the panel gets wider while they are open.
+        gear.addEventListener('click', () => {
+            const open = configDiv.style.display === 'none';
+            configDiv.style.display = open ? 'flex' : 'none';
+            panel.classList.toggle('rp-wide', open);
+        });
+        if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
+        if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
+
+        document.body.appendChild(panel);
+        makeDraggable(panel, title);
+        button_dw = true;
+        log(`panel added (language ${uiLang()})`);
+        if (rebuilt) return;   // the checks below run once per page
+
+        // Warn if the bad bundle was served. After 8s, show hint. After
+        // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
+        setTimeout(() => {
+            if (window._anyAnchorsMatched) return;
+            const s = document.getElementById('ripper-status');
+            if (s) {
+                s.textContent = i18n('st_no_anchors');
+                s.style.color = '#f80';
+            }
+            log('no anchors matched after 8s; bundle is the incompatible build');
+        }, 8000);
+
+        setTimeout(() => {
+            reportMissingPatches();   // anchors matched, but maybe not all five patches
+            if (window._anyAnchorsMatched) return;
+            let already;
+            try { already = sessionStorage.getItem('ripper_reloaded'); } catch (e) { already = '1'; }
+            if (already) return;
+            if (!CONFIG.AUTO_RELOAD_ON_FAILURE) return;
+            try { sessionStorage.setItem('ripper_reloaded', '1'); if (sessionStorage.getItem('ripper_reloaded') !== '1') return; } catch (e) { return; }
+            log('no anchors after 12s, auto-reloading once');
+            location.reload();
+        }, 12000);
+
+        setInterval(() => {
+            const s = document.getElementById('ripper-status');
+            if (!s) return;
+            if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
+            const busy = window.animationRecording || window.clipRecording;
+            const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
+            s.textContent = i18n('st_line', { state, m: window.allmodel.length, f: window.recordedFrames.length, c: getClipCount() })
+                          + (window.clips.length ? i18n('st_rec_clips', { n: window.clips.length }) : '');
+            s.style.color = busy ? '#f28b82' : '#9aa0a6';
+        }, 500);
+
+        // Document listeners are added once; they move whichever panel is current.
+        document.addEventListener('mousemove', (e) => {
+            const d = _panelDrag;
+            if (!d) return;
+            d.el.style.left = `${e.clientX - d.ox}px`;
+            d.el.style.top  = `${e.clientY - d.oy}px`;
+            d.el.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { _panelDrag = null; });
+    }
+
+    // Drag state of the panel title. The mousedown handler is set on every
+    // build (also after a language change), so a rebuilt panel can be moved too.
+    let _panelDrag = null;   // { el, ox, oy } while the title is held
+    function makeDraggable(el, handle) {
+        handle.addEventListener('mousedown', (e) => {
+            _panelDrag = { el, ox: e.clientX - el.offsetLeft, oy: e.clientY - el.offsetTop };
+            e.preventDefault();
+        });
     }
 
     // ====================================================================
@@ -5045,6 +4975,7 @@
             let lastYield = Date.now();
             const yieldUI = () => (Date.now() - lastYield > 40 ? new Promise((r) => setTimeout(() => { lastYield = Date.now(); r(); }, 0)) : null);
             const fps = opts.fps || 30;
+            const colorsAreSrgb = !!(gltf.asset && gltf.asset.extras && gltf.asset.extras.vertexColorSpace === 'srgb');
             const read = makeReader(gltf, bin);
             const warnings = [];
             const nodes = gltf.nodes || [];
@@ -5331,9 +5262,14 @@
                 if (hasUV0) uvLayer(uv0, 0, 'UVMap');
                 if (hasUV1) uvLayer(uv1, 1, 'UVMap2');
                 if (hasC) {
-                    // glTF COLOR_0 is linear; FBX apps treat vertex colours as sRGB
+                    // glTF COLOR_0 is linear; FBX apps treat vertex colours as sRGB. A file that says
+                    // its colours are already sRGB (asset.extras.vertexColorSpace) is written as is.
                     const l2s = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
-                    for (let k = 0; k < col.length; k++) if (k % 4 !== 3) col[k] = l2s(Math.min(1, Math.max(0, col[k])));
+                    for (let k = 0; k < col.length; k++) {
+                        if (k % 4 === 3) continue;
+                        const v = Math.min(1, Math.max(0, col[k]));
+                        col[k] = colorsAreSrgb ? v : l2s(v);
+                    }
                     kids.push(node('LayerElementColor', [P.I(0)], [
                         node('Version', [P.I(101)]), node('Name', [P.S('Col')]),
                         node('MappingInformationType', [P.S('ByPolygonVertex')]),
@@ -5718,6 +5654,7 @@
                 stats: { models: counts.Model || 0, geometries: counts.Geometry || 0, materials: counts.Material || 0, textures: counts.Texture || 0, clusters: objects.filter((o) => o.props[2] && o.props[2].v === 'Cluster').length, stacks: counts.AnimationStack || 0, curves: counts.AnimationCurve || 0 },
             };
         }
+        // _test: internals for unit tests of the converter in Node (not used by the userscript)
         return { gltfToFbx, _test: { quatToEuler, eulerToQuat, decompose, writeNodes, node, P } };
     })();
 
@@ -5725,19 +5662,19 @@
     // Script interceptor
     // ====================================================================
     (function installInterceptor() {
-        const Ev = function (s, t) {
-            this.script = s; this.target = t;
-            this._cancel = false; this._replace = null; this._stop = false;
+        // Minimal stand-in for Firefox's old beforescriptexecute event.
+        const Ev = function (s) {
+            this.script = s;
+            this._cancel = false; this._replace = null;
         };
         Ev.prototype.preventDefault = function () { this._cancel = true; };
-        Ev.prototype.stopPropagation = function () { this._stop = true; };
         Ev.prototype.replacePayload = function (p) { this._replace = p; };
 
-        function dispatch(script, target) {
+        function dispatch(script) {
             if (!script || script.tagName !== 'SCRIPT') return;
-            const e = new Ev(script, target);
+            const e = new Ev(script);
             if (typeof window.onbeforescriptexecute === 'function') {
-                try { window.onbeforescriptexecute(e); } catch (err) { console.error(err); }
+                try { window.onbeforescriptexecute(e); } catch (e2) { err('onbeforescriptexecute', e2.message, e2.stack); }
             }
             if (e._cancel) { script.textContent = ''; script.remove(); }
             else if (typeof e._replace === 'string') { script.textContent = e._replace; }
@@ -5749,7 +5686,7 @@
                 const an = m.addedNodes;
                 for (let j = 0; j < an.length; j++) {
                     const n = an[j];
-                    if (n && n.tagName === 'SCRIPT') dispatch(n, m.target);
+                    if (n && n.tagName === 'SCRIPT') dispatch(n);
                 }
             }
         });
@@ -5765,69 +5702,91 @@
     };
 
     const patchedSrc = {};
+    // Patch ids applied in any bundle so far. A working load applies all five
+    // (spread over two bundles, NOTES section 8); missing ones are reported once.
+    const PATCH_IDS = ['patch_0', 'patch_1', 'patch_2', 'patch_3', 'patch_4'];
+    const PATCH_ROLE = {
+        patch_0: 'texture readback (renderInto)', patch_1: 'texture readback (image_data)',
+        patch_2: 'texture readback (drawhookimg)', patch_3: 'texture names (drawhookcanvas)', patch_4: 'meshes (attachbody)',
+    };
+    const _patchesApplied = {};
+    function reportMissingPatches() {
+        if (!window._anyAnchorsMatched) return;   // nothing matched: the 8 s hint and the reload handle it
+        const miss = PATCH_IDS.filter((id) => !_patchesApplied[id]);
+        if (!miss.length) { log('all viewer patches applied'); return; }
+        warn('viewer patches missing: ' + miss.map((id) => `${id} (${PATCH_ROLE[id]})`).join(', ') +
+             '. The viewer was probably updated; that part of the export will be empty.');
+    }
 
     window.onbeforescriptexecute = (e) => {
         // Only handle the script that triggered the event, and each bundle URL once.
         // (Looping over all siblings re-executed the viewer bundle repeatedly and
         // exhausted WebGL contexts / RAM.)
-        [e.script].forEach((node) => {
-            if (!node || node.tagName !== 'SCRIPT') return;
-            if (node.__ripperOwn) return;
-            const src = node.src || '';
-            if (src.indexOf('web/dist/') < 0 && src.indexOf('standaloneViewer') < 0) return;
-            if (patchedSrc[src]) { warn('bundle already patched, dropping duplicate:', src.split('/').pop()); e.preventDefault(); e.stopPropagation(); return; }
-            patchedSrc[src] = true;
+        const node = e.script;
+        if (!node || node.tagName !== 'SCRIPT') return;
+        if (node.__ripperOwn) return;
+        const src = node.src || '';
+        if (src.indexOf('web/dist/') < 0 && src.indexOf('standaloneViewer') < 0) return;
+        if (patchedSrc[src]) { warn('bundle already patched, dropping duplicate:', src.split('/').pop()); e.preventDefault(); return; }
+        patchedSrc[src] = true;
 
-            let js = '';
-            try {
-                const req = new XMLHttpRequest();
-                req.open('GET', src, false);
-                req.send('');
-                if (req.status >= 200 && req.status < 300) js = req.responseText || '';
-                else err('bundle fetch status', req.status, src.split('/').pop());
-            } catch (fe) { err('bundle fetch failed:', fe.message, src.split('/').pop()); }
-            if (!js) { delete patchedSrc[src]; return; }   // leave the original script running
+        let js = '';
+        try {
+            const req = new XMLHttpRequest();
+            req.open('GET', src, false);
+            req.send('');
+            if (req.status >= 200 && req.status < 300) js = req.responseText || '';
+            else err('bundle fetch status', req.status, src.split('/').pop());
+        } catch (fe) { err('bundle fetch failed:', fe.message, src.split('/').pop()); }
+        if (!js) { delete patchedSrc[src]; return; }   // leave the original script running
 
-            e.preventDefault();
-            e.stopPropagation();
+        e.preventDefault();
 
-            let ret, applied = [];
-            for (let rk in RE) if (RE.hasOwnProperty(rk)) RE[rk].lastIndex = 0;
+        let ret, applied = [];
+        for (let rk in RE) if (RE.hasOwnProperty(rk)) RE[rk].lastIndex = 0;
 
-            if ((ret = RE.renderInto1.exec(js))) {
-                js = js.slice(0, ret.index + ret[0].length) + ',i' + js.slice(ret.index + ret[0].length);
-                applied.push('patch_0');
-            }
-            if ((ret = RE.renderInto2.exec(js))) {
-                js = js.slice(0, ret.index + ret[0].length) + ',image_data' + js.slice(ret.index + ret[0].length);
-                applied.push('patch_1');
-            }
-            if ((ret = RE.drawArrays.exec(js))) {
-                js = js.slice(0, ret.index + ret[0].length) + ',window.drawhookimg(t,image_data)' + js.slice(ret.index + ret[0].length);
-                applied.push('patch_2');
-            }
-            if ((ret = RE.getResourceImage.exec(js))) {
-                js = js.slice(0, ret.index + ret[0].length) + 'e = window.drawhookcanvas(e,this._imageModel);' + js.slice(ret.index + ret[0].length);
-                applied.push('patch_3');
-            }
-            if ((ret = RE.drawGeometry.exec(js))) {
-                js = js.slice(0, ret.index + ret[1].length) + ';try{window.attachbody(t);}catch(_){}' + js.slice(ret.index + ret[1].length);
-                applied.push('patch_4');
-                setTimeout(addbtnfunc, 2000);
-            }
+        if ((ret = RE.renderInto1.exec(js))) {
+            js = js.slice(0, ret.index + ret[0].length) + ',i' + js.slice(ret.index + ret[0].length);
+            applied.push('patch_0');
+        }
+        if ((ret = RE.renderInto2.exec(js))) {
+            js = js.slice(0, ret.index + ret[0].length) + ',image_data' + js.slice(ret.index + ret[0].length);
+            applied.push('patch_1');
+        }
+        if ((ret = RE.drawArrays.exec(js))) {
+            js = js.slice(0, ret.index + ret[0].length) + ',window.drawhookimg(t,image_data)' + js.slice(ret.index + ret[0].length);
+            applied.push('patch_2');
+        }
+        if ((ret = RE.getResourceImage.exec(js))) {
+            js = js.slice(0, ret.index + ret[0].length) + 'e = window.drawhookcanvas(e,this._imageModel);' + js.slice(ret.index + ret[0].length);
+            applied.push('patch_3');
+        }
+        if ((ret = RE.drawGeometry.exec(js))) {
+            js = js.slice(0, ret.index + ret[1].length) + ';try{window.attachbody(t);}catch(_){}' + js.slice(ret.index + ret[1].length);
+            applied.push('patch_4');
+            setTimeout(addbtnfunc, 2000);
+        }
 
-            if (applied.length) {
-                window._anyAnchorsMatched = true;
-                try { sessionStorage.removeItem('ripper_reloaded'); } catch (e) {}
-                log('patched', src.split('/').pop(), '→', applied.join(','));
-            }
+        if (applied.length) {
+            applied.forEach((id) => { _patchesApplied[id] = true; });
+            window._anyAnchorsMatched = true;
+            try { sessionStorage.removeItem('ripper_reloaded'); } catch (e) {}
+            log('patched', src.split('/').pop(), '→', applied.join(','));
+        }
 
-            const s = document.createElement('script');
-            s.__ripperOwn = true;
-            s.type = 'text/javascript';
-            s.text = js;
-            (document.head || document.getElementsByTagName('head')[0]).appendChild(s);
-        });
+        // The sentinel at the end proves the patched copy ran to the end. An inline
+        // script runs during appendChild, so it can be checked right after. If the
+        // page blocks inline scripts (CSP) or the bundle throws, it stays unset.
+        const runKey = src.split('/').pop();
+        window.__ripperRan = window.__ripperRan || {};
+        const s = document.createElement('script');
+        s.__ripperOwn = true;
+        s.type = 'text/javascript';
+        s.text = js + `\n;window.__ripperRan[${JSON.stringify(runKey)}]=1;`;
+        (document.head || document.getElementsByTagName('head')[0]).appendChild(s);
+        if (!window.__ripperRan[runKey]) {
+            err(`patched bundle did not run to the end: ${runKey}. The page may block inline scripts (CSP), or the bundle threw (see the error above). The viewer may not load.`);
+        }
     };
 
     (function kickoff() {

@@ -34,7 +34,7 @@ Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the
 - A desktop browser, for example Chrome, Brave, Edge or Firefox.
 - [Tampermonkey](https://www.tampermonkey.net/) or a compatible userscript manager.
 
-Tested with Tampermonkey (Chrome) and Violentmonkey (Firefox).
+Tested with Tampermonkey (Chrome) and Violentmonkey (Firefox). The script must run in the page itself, not in an isolated sandbox. Greasemonkey 4 runs scripts only in a sandbox, so the script does not work with it.
 
 ## Install
 

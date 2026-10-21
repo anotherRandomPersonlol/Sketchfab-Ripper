@@ -84,7 +84,7 @@ much harder than the palette path we used.
 - skel_root = W_mesh (mesh's world matrix via getMatrix chain)
 - IBM = identity
 - Recorder reads palette + world per frame
-- Export: row-major expandMat3x4, quaternion hemisphere fix
+- Export: row-major palette to 4x4 (now `palMat4`), quaternion hemisphere fix
 
 ### 10. Gotchas learned the hard way
 - MutationObserver scope matters. Watching `document.head` only
@@ -95,8 +95,9 @@ much harder than the palette path we used.
   Many webpack chunks go into body.
 - readPixels per-frame freezes the viewer. Guard with
   `if (saveimagecache2[url].dataURL) return`.
-- Sketchfab is an SPA. Clear `window.allmodel` when model-name
-  label changes, or you accumulate duplicates.
+- Sketchfab is an SPA. `window.allmodel` should be cleared when the model-name
+  label changes, or duplicates accumulate. Not done yet: the code never clears it
+  (open item #1, model-switch reset).
 
 ## Animation clips and rest pose (added Oct 2026)
 
@@ -121,6 +122,12 @@ node). Useful members:
 - Seeking while paused (`setSeekTime`) updates the palette only
   every 15-20 frames. Record in real time instead.
 - Frame times come from `getSimulationTime()` (wall-clock fallback).
+- `getSimulationTime()` runs at wall speed; the playback speed (x0.1 to x2) is `getTimeFactor()` / `_timeFactor`
+  (probe 2026-10-20: ratio 1.0 at x0.5 with `_timeFactor` 0.5). A speed change rescales the clock so that
+  `getSimulationTime() * getTimeFactor()` stays continuous (probe 2026-10-21, `tools/probe-speed-change.js`: x1 -> x2
+  turns 15.65 into 7.85, x0.5 -> x0.1 turns 37.07 into 185.85). That product is the clip time; the recorder adds its
+  increase per frame. (The first version added raw clock deltas x speed and took the rescale jumps as clip time.)
+  The recorder stops as "clock stalled" only when that clip time does not move for 3 s of wall time.
   The viewer defaults to "Play all" and can switch clips at the end of
   one, so samples at or past `duration` are dropped. The loop is closed
   with a copy of frame 0 at `t = duration`.
@@ -160,10 +167,17 @@ If the console shows `init` and `panel added` but no `patched` lines, the
 wrong bundle was served. Reload (the panel hints after 8 s and reloads
 once after 12 s). With zero meshes in the panel, patch_4 did not fire.
 
+### 15b. The original bundle still runs (review R7, tested 2026-10-20)
+`dispatch` cancels a bundle with `textContent = ''` and `remove()`. Chromium test with a fake bundle:
+- a `<script src>` in the HTML: only the patched copy runs.
+- a `<script src>` added by code (how webpack loads chunks): the original ALSO runs, after the patched copy.
+It works today, probably because webpack skips a chunk that is already installed. If a viewer update
+breaks capture although every patch applied, check this first. The proper fix is to replace the script
+at insertion time (hook `appendChild`/`insertBefore`) instead of removing it after insertion.
+
 ### 16. Fixed gotchas (do NOT regress)
 - The MutationObserver must watch `document`, not `document.head`.
 - Guard per-frame pixel reads: `if (saveimagecache2[url].dataURL) return;`
-- Sketchfab is an SPA. Clear `window.allmodel` when the model changes.
 - The viewer runs in an iframe (URL contains `/embed`). Never add a
   top-frame-only guard.
 - Vertex transform glTF evaluates: `worldVertex = YUP * W_mesh * palette[i] * restVertex`
@@ -392,7 +406,7 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 - Girl face confirmed much better (8 sheared joints per body skin now stored via helper nodes; residual max 2.3% before the fix path,
   "only slightly noticeable"); Patriot fine.
 - New setting "Record FPS" (`RECORD_FPS`, 0 = every rendered frame (default, unchanged behaviour), 60/30/24/15). `fpsDue()` throttles both the
-  clip recorder and the manual RECORD loop. The old `CLIP_FPS` key stays only so saved settings still load (it was never applied).
+  clip recorder and the manual RECORD loop. (The old `CLIP_FPS` key was removed later; `loadConfig` ignores unknown saved keys.)
 - Hidden tab: a `visibilitychange` listener warns when the tab is hidden during any recording (rAF pauses, frames skipped / clip truncated);
   README lists it under known limitations.
 
@@ -496,3 +510,13 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
 - FBX still runs the MR merge: it normalizes the sources (glossiness inverted to roughness, missing maps filled) into one image, which the FBX step splits again. For FBX the merge is PNG, so the split maps have no JPEG loss, and the packed image is left out of the zip.
 - Test needed in the browser: GLB and FBX download on the three models, progress bars during RECORD ALL CLIPS and FBX export, then Blender import of the FBX.
 
+
+## Round 25: code review and cleanup (branch review-cleanup)
+
+- Two independent reviews (a fresh Claude with no history, and Gemini) gave the findings R1-R21 and G1-G3. Each finding was checked against the code before a change; documented workarounds were kept.
+- Bugs fixed: a RECORD ALL that kept one clip exported no animation (export used `window.clips` only when it held 2 or more); the panel could not be dragged after a language change; a cancelled RECORD ALL showed success (the flag was cleared before it was read); an export in a hidden tab stopped at `nextPaint` (rAF does not fire); FBX vertex colours were sRGB-encoded twice with "Vertex color sRGB>linear" off (the GLB now says `asset.extras.vertexColorSpace: "srgb"`).
+- Playback speed: `getSimulationTime()` runs at wall speed, the x0.1-x2 setting is `getTimeFactor()`, and a speed change rescales the clock; clip time = simulation time x speed (probes `tools/probe-playback-speed.js`, `tools/probe-speed-change.js`). The stall stop needs 3 s without clip-time progress.
+- Untextured specular/gloss materials: the flat colour is in `DiffusePBR` (or `DiffuseColor`), not only `AlbedoPBR` (warehouse lamps were white).
+- Diagnostics: missing viewer patches are listed 12 s after load (`all viewer patches applied` otherwise); a sentinel appended to the patched bundle reports when it did not run (CSP, throw); export start logs one `viewer: ...` line of the private fields found.
+- Structure: sections reordered (code moved, not changed; see CONTRIBUTING), `_downloadGLBSync` split into helpers (primitiveTriangles, vertexColorAccessor, morphTargetAccessors, buildTexturePool, finishMaterials, collectClipSets, pruneUnusedTextures, packGlb), settings rows built by `settingRow`/`checkSetting`/`selectSetting` with one stylesheet.
+- Test method for the refactor: a mock osgjs scene (skinned mesh with a readable rig, skinned mesh without a bone list and with shear and a show/hide-by-scale joint, strip with restart index and a bridging sliver, wireframe overlay, morph targets, MR and opacity merges, flat materials, two clips and a Static Pose snapshot) goes through the real hooks and the export. GLB and FBX outputs and the log lines were byte-identical before and after every refactor step, in four setting combinations. The settings form was compared pixel by pixel in three languages.
