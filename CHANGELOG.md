@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.7.0
 
 ### Fixed
 - RECORD ALL CLIPS that ends with one recorded clip (for example, cancelled after the first clip) now exports that clip. Before, the export had no animation.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.6.0
+// @version      1.7.0
 // @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @name:pl         Sketchfab Ripper
 // @description:pl  Pobieraj modele ze Sketchfab jako GLB lub FBX: szkielet, nagrane klipy animacji, tekstury PBR, kolory wierzchołków, klucze kształtu
