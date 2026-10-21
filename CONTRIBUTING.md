@@ -2,6 +2,8 @@
 
 Thank you for helping to make Sketchfab Ripper better. This page tells you how to report a problem, how to ask a question and how to send a code change.
 
+Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Ask a question
 
 Use [Discussions](../../discussions) for questions and ideas. Use Issues only for problems with an export.
