@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- FBX: a see-through material whose opacity is a value (for example a rotor blur at 5%) stays see-through in Blender. The opacity is baked into the alpha of a copy of its colour image (`<image>_a5.png`), because Blender replaces the opacity value with the image alpha. The GLB is unchanged.
+- A triangle strip that jumps between two separate parts of a mesh (the two rotor discs of the DC News helicopter) no longer leaves a thin stripe between them when **Drop strip slivers** is on. Before, only bridges longer than 20 typical edges were checked.
+
 ## v1.7.0
 
 ### Fixed
