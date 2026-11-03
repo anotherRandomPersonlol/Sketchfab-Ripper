@@ -2776,10 +2776,32 @@
         return acc;
     }
 
+    // Triangles of one primitive without filters or logs (null for points and lines): the context
+    // that the sliver filter of the other primitives needs.
+    function stripTrianglesPlain(pm, pi2, vc) {
+        const tl = [];
+        const add = (a, b, c) => { if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) tl.push(a, b, c); };
+        let t2, rs = 0;
+        if (pm === 4) { for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) add(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]); }
+        else if (pm === 5 || pm === 6) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; continue; }
+                if (t2 - rs < 2) continue;
+                if (pm === 6) add(pi2[rs], pi2[t2 - 1], pi2[t2]);
+                else if ((t2 - rs) % 2 === 0) add(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
+                else add(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
+            }
+        } else return null;
+        return tl;
+    }
+
     // One index primitive (mode 4 list, 5 strip, 6 fan) as a TRIANGLES index list. Drops degenerate
     // triangles (strip joins) and restart / out-of-range indices; with DROP_STRIP_SLIVERS also the
     // bridging sliver triangles of strips (logged). Returns null for points and lines.
-    function primitiveTriangles(pm, pi2, vertex, vc, nm) {
+    // others: the triangles (flat index list) of the mesh's other triangle primitives. A strip
+    // triangle whose edge is shared with one of them is attached there, so it is not a bridge.
+    function primitiveTriangles(pm, pi2, vertex, vc, nm, others) {
+        others = others || [];
         let tl = [], t2;
         // Degenerate triangles (repeated index) are strip joins; drop them so
         // Blender does not show long zero-area edges between distant vertices.
@@ -2865,11 +2887,16 @@
                     const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
                     if (ecount[k3] !== undefined) ecount[k3]++;
                 }
+                for (q = 0; q + 2 < others.length; q += 3) for (e3 = 0; e3 < 3; e3++) {
+                    const k4 = ek(others[q + e3], others[q + (e3 + 1) % 3]);
+                    if (ecount[k4] !== undefined) ecount[k4]++;
+                }
                 // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
                 // grass, hair strip) does not, so it stays.
                 const isCand = {}, onReal = new Uint8Array(nw);
                 for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
                 for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
+                for (q = 0; q < others.length; q++) onReal[wid[others[q]]] = 1;
                 for (ci2 = 0; ci2 < cand.length; ci2++) {
                     let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
                     for (e3 = 0; e3 < 3; e3++) {
@@ -2892,6 +2919,11 @@
                         const w0 = wid[tl[q * 3]], w1 = wid[tl[q * 3 + 1]], w2 = wid[tl[q * 3 + 2]];
                         onReal2[w0] = onReal2[w1] = onReal2[w2] = 1;
                         par[root(w0)] = root(w1); par[root(w1)] = root(w2);
+                    }
+                    for (q = 0; q + 2 < others.length; q += 3) {
+                        const o0 = wid[others[q]], o1 = wid[others[q + 1]], o2 = wid[others[q + 2]];
+                        onReal2[o0] = onReal2[o1] = onReal2[o2] = 1;
+                        par[root(o0)] = root(o1); par[root(o1)] = root(o2);
                     }
                     for (ci2 = 0; ci2 < gap.length; ci2++) {
                         const cq3 = gap[ci2], cw3 = [tl[cq3 * 3], tl[cq3 * 3 + 1], tl[cq3 * 3 + 2]];
@@ -3372,11 +3404,17 @@
                 let mergedInd = null;
                 if (mdl.primitives.length > 0) {
                     let triParts = [], skippedP = 0, modeLog = [];
-                    mdl.primitives.forEach((pr) => {
-                        const pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices;
+                    // Triangle lists of the primitives without the sliver filter: the filter of each
+                    // strip needs the other primitives' triangles (a shared edge is no bridge).
+                    const modeOf = (pr) => ((pr.mode === undefined || pr.mode === null) ? 4 : pr.mode);
+                    const plain = mdl.primitives.map((pr) => (pr.indices && pr.indices.length && mdl.primitives.length > 1 ? stripTrianglesPlain(modeOf(pr), pr.indices, vc) : null));
+                    mdl.primitives.forEach((pr, pk) => {
+                        const pm = modeOf(pr), pi2 = pr.indices;
                         modeLog.push(`${pm}x${pi2 ? pi2.length : 0}`);
                         if (!pi2 || !pi2.length) return;
-                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm);
+                        let others = [];
+                        if (mdl.primitives.length > 1 && (pm === 5 || pm === 6)) plain.forEach((pt, ok) => { if (ok !== pk && pt) others = others.concat(pt); });
+                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm, others);
                         if (!tl) { skippedP++; return; }
                         triParts.push(tl);
                     });
