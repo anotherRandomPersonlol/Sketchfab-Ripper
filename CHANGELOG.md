@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.7.1
 
 ### Fixed
 - FBX: a see-through material whose opacity is a value (for example a rotor blur at 5%) stays see-through in Blender. The opacity is baked into the alpha of a copy of its colour image (`<image>_a5.png`), because Blender replaces the opacity value with the image alpha. The GLB is unchanged.
