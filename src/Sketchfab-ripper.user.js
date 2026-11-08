@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.7.0
+// @version      1.7.1
 // @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @name:pl         Sketchfab Ripper
 // @description:pl  Pobieraj modele ze Sketchfab jako GLB lub FBX: szkielet, nagrane klipy animacji, tekstury PBR, kolory wierzchołków, klucze kształtu
@@ -2776,10 +2776,32 @@
         return acc;
     }
 
+    // Triangles of one primitive without filters or logs (null for points and lines): the context
+    // that the sliver filter of the other primitives needs.
+    function stripTrianglesPlain(pm, pi2, vc) {
+        const tl = [];
+        const add = (a, b, c) => { if (a !== b && b !== c && a !== c && a < vc && b < vc && c < vc) tl.push(a, b, c); };
+        let t2, rs = 0;
+        if (pm === 4) { for (t2 = 0; t2 + 2 < pi2.length; t2 += 3) add(pi2[t2], pi2[t2 + 1], pi2[t2 + 2]); }
+        else if (pm === 5 || pm === 6) {
+            for (t2 = 0; t2 < pi2.length; t2++) {
+                if (pi2[t2] >= vc) { rs = t2 + 1; continue; }
+                if (t2 - rs < 2) continue;
+                if (pm === 6) add(pi2[rs], pi2[t2 - 1], pi2[t2]);
+                else if ((t2 - rs) % 2 === 0) add(pi2[t2 - 2], pi2[t2 - 1], pi2[t2]);
+                else add(pi2[t2 - 1], pi2[t2 - 2], pi2[t2]);
+            }
+        } else return null;
+        return tl;
+    }
+
     // One index primitive (mode 4 list, 5 strip, 6 fan) as a TRIANGLES index list. Drops degenerate
     // triangles (strip joins) and restart / out-of-range indices; with DROP_STRIP_SLIVERS also the
     // bridging sliver triangles of strips (logged). Returns null for points and lines.
-    function primitiveTriangles(pm, pi2, vertex, vc, nm) {
+    // others: the triangles (flat index list) of the mesh's other triangle primitives. A strip
+    // triangle whose edge is shared with one of them is attached there, so it is not a bridge.
+    function primitiveTriangles(pm, pi2, vertex, vc, nm, others) {
+        others = others || [];
         let tl = [], t2;
         // Degenerate triangles (repeated index) are strip joins; drop them so
         // Blender does not show long zero-area edges between distant vertices.
@@ -2819,16 +2841,20 @@
             for (q = 0; q < nT; q += step) lens.push(Math.max(el(tl[q * 3], tl[q * 3 + 1]), el(tl[q * 3 + 1], tl[q * 3 + 2]), el(tl[q * 3], tl[q * 3 + 2])));
             lens.sort((a, b) => a - b);
             let med = lens[lens.length >> 1] || 0, lim = Math.max(20 * med, 0.05 * size), hits = 0, shown = 0, drop = {}, nDrop = 0, cand = [];
+            const gapLim = 4 * med, gap = [];
+            let nGap = 0;   // shorter bridges between two separate parts (see below)
+            const stripSliver = CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6);
             for (q = 0; q < nT; q++) {
                 const a0 = tl[q * 3], b0 = tl[q * 3 + 1], c0 = tl[q * 3 + 2];
                 const L = Math.max(el(a0, b0), el(b0, c0), el(a0, c0));
-                if (!(L > lim)) continue;
-                hits++;
+                if (!(L > lim) && !(stripSliver && L > gapLim)) continue;
                 // Bridging triangle of a strip join without repeated vertices: very long and almost no width.
                 const ux = vv[b0 * 3] - vv[a0 * 3], uy = vv[b0 * 3 + 1] - vv[a0 * 3 + 1], uz = vv[b0 * 3 + 2] - vv[a0 * 3 + 2];
                 const wx = vv[c0 * 3] - vv[a0 * 3], wy = vv[c0 * 3 + 1] - vv[a0 * 3 + 1], wz = vv[c0 * 3 + 2] - vv[a0 * 3 + 2];
                 const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
                 const height = Math.sqrt(cx * cx + cy * cy + cz * cz) / L;   // 2*area / longest edge
+                if (!(L > lim)) { if (height < 0.03 * L) gap.push(q); continue; }
+                hits++;
                 if (CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) cand.push(q);
                 if (shown < 3 && CONFIG.DROP_STRIP_SLIVERS && (pm === 5 || pm === 6) && height < 2 * med) {
                     shown++;
@@ -2840,7 +2866,7 @@
             }
             // A bridging triangle spans a gap: one of its long edges is used by no other triangle
             // (vertices welded by position). Long thin tubes/rods share every long edge, so they stay.
-            if (cand.length) {
+            if (cand.length || gap.length) {
                 let qs = Math.max(size * 1e-6, 1e-9), wmap = {}, wid = new Int32Array(vc), nw = 0, vi;
                 for (vi = 0; vi < vc; vi++) {
                     const wk = `${Math.round(vv[vi * 3] / qs)},${Math.round(vv[vi * 3 + 1] / qs)},${Math.round(vv[vi * 3 + 2] / qs)}`;
@@ -2853,15 +2879,24 @@
                     const cq = cand[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
                     for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > lim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
                 }
+                for (ci2 = 0; ci2 < gap.length; ci2++) {
+                    const cq = gap[ci2], cv3 = [tl[cq * 3], tl[cq * 3 + 1], tl[cq * 3 + 2]];
+                    for (e3 = 0; e3 < 3; e3++) if (el(cv3[e3], cv3[(e3 + 1) % 3]) > gapLim) ecount[ek(cv3[e3], cv3[(e3 + 1) % 3])] = 0;
+                }
                 for (q = 0; q < nT; q++) for (e3 = 0; e3 < 3; e3++) {
                     const k3 = ek(tl[q * 3 + e3], tl[q * 3 + (e3 + 1) % 3]);
                     if (ecount[k3] !== undefined) ecount[k3]++;
+                }
+                for (q = 0; q + 2 < others.length; q += 3) for (e3 = 0; e3 < 3; e3++) {
+                    const k4 = ek(others[q + e3], others[q + (e3 + 1) % 3]);
+                    if (ecount[k4] !== undefined) ecount[k4]++;
                 }
                 // A bridge joins real geometry at both ends of its open edge; a free thin card (wire,
                 // grass, hair strip) does not, so it stays.
                 const isCand = {}, onReal = new Uint8Array(nw);
                 for (ci2 = 0; ci2 < cand.length; ci2++) isCand[cand[ci2]] = true;
                 for (q = 0; q < nT; q++) if (!isCand[q]) { onReal[wid[tl[q * 3]]] = 1; onReal[wid[tl[q * 3 + 1]]] = 1; onReal[wid[tl[q * 3 + 2]]] = 1; }
+                for (q = 0; q < others.length; q++) onReal[wid[others[q]]] = 1;
                 for (ci2 = 0; ci2 < cand.length; ci2++) {
                     let cq2 = cand[ci2], cw = [tl[cq2 * 3], tl[cq2 * 3 + 1], tl[cq2 * 3 + 2]], open = false;
                     for (e3 = 0; e3 < 3; e3++) {
@@ -2870,6 +2905,36 @@
                     }
                     if (open) { drop[cq2] = true; nDrop++; }
                 }
+                // A bridge shorter than 20x the typical edge (two rotor discs in one strip: their spokes are
+                // longer than the bridge). It is only dropped when its open edge joins two parts of the mesh
+                // that are not connected by any other triangle; a fan or a shard edge stays in one part.
+                if (gap.length) {
+                    const isOut = {}, onReal2 = new Uint8Array(nw), par = new Int32Array(nw);
+                    for (vi = 0; vi < nw; vi++) par[vi] = vi;
+                    const root = (x) => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+                    for (ci2 = 0; ci2 < cand.length; ci2++) isOut[cand[ci2]] = true;
+                    for (ci2 = 0; ci2 < gap.length; ci2++) isOut[gap[ci2]] = true;
+                    for (q = 0; q < nT; q++) {
+                        if (isOut[q]) continue;
+                        const w0 = wid[tl[q * 3]], w1 = wid[tl[q * 3 + 1]], w2 = wid[tl[q * 3 + 2]];
+                        onReal2[w0] = onReal2[w1] = onReal2[w2] = 1;
+                        par[root(w0)] = root(w1); par[root(w1)] = root(w2);
+                    }
+                    for (q = 0; q + 2 < others.length; q += 3) {
+                        const o0 = wid[others[q]], o1 = wid[others[q + 1]], o2 = wid[others[q + 2]];
+                        onReal2[o0] = onReal2[o1] = onReal2[o2] = 1;
+                        par[root(o0)] = root(o1); par[root(o1)] = root(o2);
+                    }
+                    for (ci2 = 0; ci2 < gap.length; ci2++) {
+                        const cq3 = gap[ci2], cw3 = [tl[cq3 * 3], tl[cq3 * 3 + 1], tl[cq3 * 3 + 2]];
+                        for (e3 = 0; e3 < 3; e3++) {
+                            const wa = wid[cw3[e3]], wb = wid[cw3[(e3 + 1) % 3]];
+                            if (el(cw3[e3], cw3[(e3 + 1) % 3]) > gapLim && ecount[ek(cw3[e3], cw3[(e3 + 1) % 3])] === 1 &&
+                                onReal2[wa] && onReal2[wb] && root(wa) !== root(wb)) { drop[cq3] = true; nDrop++; nGap++; break; }
+                        }
+                    }
+                    if (nGap) log(`mesh ${nm}: ${nGap} bridging triangle(s) between separate parts of the strip`);
+                }
             }
             if (nDrop) {
                 const kept = [];
@@ -2877,7 +2942,7 @@
                 tl = kept;
                 log(`mesh ${nm}: dropped ${nDrop} bridging sliver triangle(s) from the strip (stripes)`);
             }
-            if (hits > nDrop) log(`mesh ${nm}: ${hits - nDrop} long thin triangle(s) kept (real geometry, edges shared)`);
+            if (hits > nDrop - nGap) log(`mesh ${nm}: ${hits - (nDrop - nGap)} long thin triangle(s) kept (real geometry, edges shared)`);
         })();
         if (oobN) log('indices:', nm, `mode ${pm}`, `${pi2.length} indices ->`, `${tl.length / 3} triangles, restart/out-of-range ${oobN}, degenerate ${degN}, vertices ${vc}`);
         return tl;
@@ -3339,11 +3404,17 @@
                 let mergedInd = null;
                 if (mdl.primitives.length > 0) {
                     let triParts = [], skippedP = 0, modeLog = [];
-                    mdl.primitives.forEach((pr) => {
-                        const pm = (pr.mode === undefined || pr.mode === null) ? 4 : pr.mode, pi2 = pr.indices;
+                    // Triangle lists of the primitives without the sliver filter: the filter of each
+                    // strip needs the other primitives' triangles (a shared edge is no bridge).
+                    const modeOf = (pr) => ((pr.mode === undefined || pr.mode === null) ? 4 : pr.mode);
+                    const plain = mdl.primitives.map((pr) => (pr.indices && pr.indices.length && mdl.primitives.length > 1 ? stripTrianglesPlain(modeOf(pr), pr.indices, vc) : null));
+                    mdl.primitives.forEach((pr, pk) => {
+                        const pm = modeOf(pr), pi2 = pr.indices;
                         modeLog.push(`${pm}x${pi2 ? pi2.length : 0}`);
                         if (!pi2 || !pi2.length) return;
-                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm);
+                        let others = [];
+                        if (mdl.primitives.length > 1 && (pm === 5 || pm === 6)) plain.forEach((pt, ok) => { if (ok !== pk && pt) others = others.concat(pt); });
+                        const tl = primitiveTriangles(pm, pi2, mdl.vertex, vc, nm, others);
                         if (!tl) { skippedP++; return; }
                         triParts.push(tl);
                     });
@@ -4233,6 +4304,19 @@
         });
     }
 
+    // A copy of an image with its alpha multiplied by k (FBX: a see-through material with an opacity factor).
+    function scaleAlpha(blob, k) {
+        return createImageBitmap(blob).then((bmp) => {
+            const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+            const cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+            if (bmp.close) bmp.close();
+            const id = cx.getImageData(0, 0, c.width, c.height), d = id.data;
+            for (let i = 3; i < d.length; i += 4) d[i] = Math.round(d[i] * k);
+            cx.putImageData(id, 0, 0);
+            return new Promise((res) => c.toBlob((b) => { c.width = 0; res(b); }, 'image/png'));
+        });
+    }
+
     // FbxWriter reports English labels like "geometry 3/49": show them in the panel language.
     function fbxLabel(label) {
         const m = /^([a-z ]+?)(?: (\d+)\/(\d+))?$/.exec(label || '');
@@ -4263,10 +4347,16 @@
                 progSub(n++ / Math.max(1, res.splits.length), sp.out.split('/').pop());
                 const src = byUri[sp.src];
                 if (!src) { warn(`fbx: no image for ${sp.src}, metal/rough map left out`); return null; }
-                return splitChannel(src, sp.channel).then((b) => { if (b) { built.extraTex.push({ path: sp.out, blob: b }); built.skipTex[sp.src] = true; } })
-                    .catch((e) => warn(`fbx: could not split ${sp.src}: ${e.message}`));
+                const job = sp.channel === 'A' ? scaleAlpha(src, sp.alpha) : splitChannel(src, sp.channel);
+                return job.then((b) => {
+                    if (!b) return;
+                    built.extraTex.push({ path: sp.out, blob: b });
+                    if (sp.channel !== 'A') built.skipTex[sp.src] = true;   // the packed metal/rough image is not used by the FBX
+                }).catch((e) => warn(`fbx: could not write ${sp.out.split('/').pop()}: ${e.message}`));
             }), Promise.resolve()).then(() => {
-                if (res.splits.length) log(`fbx: ${built.extraTex.length} metal/rough maps split from ${res.splits.length / 2} packed texture(s)`);
+                const nA = res.splits.filter((sp) => sp.channel === 'A').length, nMR = res.splits.length - nA;
+                if (nMR) log(`fbx: ${nMR} metal/rough maps split from ${nMR / 2} packed texture(s)`);
+                if (nA) log(`fbx: ${nA} colour image(s) with the material opacity baked into the alpha (${res.splits.filter((sp) => sp.channel === 'A').map((sp) => sp.out.split('/').pop()).join(', ')})`);
                 return packZip(built, { [`${built.modelName}.fbx`]: new Blob([res.fbx], { type: 'application/octet-stream' }) }, stage, 5);
             });
         });
@@ -4654,6 +4744,10 @@
     // splits: textures that FBX needs as separate files (glTF packs roughness
     //   in G and metalness in B of one image). The caller writes them:
     //   { src: <image uri>, channel: 'G'|'B', out: <new uri> }
+    //   or, for a see-through material whose opacity is a factor (glTF baseColorFactor alpha < 1):
+    //   { src, channel: 'A', alpha: <factor>, out } = the image with its alpha multiplied by the factor.
+    //   FBX importers (Blender) replace the opacity value with the alpha of a linked or 32-bit
+    //   diffuse image, so the factor must be in the image.
     const FbxWriter = (function () {
         'use strict';
         const KTIME = 46186158000;          // FBX ticks per second
@@ -5108,7 +5202,16 @@
                 const emK = (m.emissiveTexture && Math.max(...em0) > 0) ? Math.max(...em0) : 1;
                 const em = em0.map((v) => v / emK);
                 const shin = Math.pow((1 - rough) * 10, 2);
-                const alpha = (m.alphaMode === 'BLEND' || m.alphaMode === 'MASK') ? bc[3] : 1;
+                const seeThrough = m.alphaMode === 'BLEND' || m.alphaMode === 'MASK';
+                let alpha = seeThrough ? bc[3] : 1;
+                let base = texOf(pbr.baseColorTexture);
+                if (base && seeThrough && alpha < 0.999 && !base.bytes) {
+                    // bake the opacity factor into a copy of the colour image (see "splits" above)
+                    const dot = base.uri.lastIndexOf('.'), out = `${dot > 0 ? base.uri.slice(0, dot) : base.uri}_a${Math.round(alpha * 100)}.png`;
+                    splits.push({ src: base.uri, channel: 'A', alpha, out });
+                    base = { uri: out };
+                    alpha = 1;
+                }
                 addObj('Material', node('Material', [P.L(id), P.S(objName(m.name || ('material_' + mi), 'Material')), P.S('')], [
                     node('Version', [P.I(102)]),
                     node('ShadingModel', [P.S('Phong')]),
@@ -5130,9 +5233,8 @@
                     ]),
                 ]));
                 const link = (info, prop, label) => { if (info) OP(textureFor(info.uri, info.bytes, label), id, prop); };
-                const base = texOf(pbr.baseColorTexture);
                 link(base, 'DiffuseColor');
-                if (base && (m.alphaMode === 'BLEND' || m.alphaMode === 'MASK')) link(base, 'TransparentColor');
+                if (base && seeThrough) link(base, 'TransparentColor');
                 link(texOf(m.normalTexture), 'NormalMap');
                 link(texOf(m.emissiveTexture), 'EmissiveColor');
                 const mr = texOf(pbr.metallicRoughnessTexture);
