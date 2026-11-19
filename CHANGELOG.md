@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.7.2
 
 ### Added
 - **Export annotations** setting (off by default). Each annotation becomes an empty object at its point on the model, named after its title, in an `annotations` group. The text and the camera view are kept as custom properties (glTF extras). Works for GLB and FBX.
