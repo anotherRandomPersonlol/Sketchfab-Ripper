@@ -77,6 +77,8 @@ If you do not record, the export contains the model in its current pose.
 
 Click the gear icon in the panel. The script keeps your settings for the next visit. Hold the pointer on a setting name to see what it does.
 
+![The panel before and after the UI update: separate GLB and FBX buttons, grouped sections, and a scrollable settings list](docs/images/ui-update.png)
+
 | Setting | Default | What it does |
 |---|---|---|
 | Language | Auto | Language of the panel. Auto uses the language of your browser. |
