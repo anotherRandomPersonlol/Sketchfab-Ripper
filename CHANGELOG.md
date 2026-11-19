@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **Export annotations** setting (off by default). Each annotation becomes an empty object at its point on the model, named after its title, in an `annotations` group. The text and the camera view are kept as custom properties (glTF extras). Works for GLB and FBX.
+
 ### Fixed
 - A model uploaded as one mesh with no name (for example a 3D scan) is exported. Before, the script skipped every mesh without a name, so such a model gave an empty export ("meshes: 0" while the model was on screen). Unnamed meshes outside the model, such as the viewer's annotation markers, are still skipped, and both cases are logged.
 - A model with no texture files (for example one shown with the viewer's matcap) no longer waits for the texture timeout at export. The wait skipped nothing before, so it also counted the matcap and the generated colour atlas, which the export never uses. The wait message now names the channels that are still loading.
