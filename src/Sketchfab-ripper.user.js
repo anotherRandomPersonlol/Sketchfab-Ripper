@@ -3161,7 +3161,7 @@
             if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
             for (let ck in matsChannelInfo[cmi]) {
                 const ci = matsChannelInfo[cmi][ck];
-                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
+                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ck !== 'Matcap' && ck !== 'Inspector' && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
             }
         }
         if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
