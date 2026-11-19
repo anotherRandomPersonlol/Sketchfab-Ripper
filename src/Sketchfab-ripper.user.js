@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sketchfab Ripper
 // @namespace    https://github.com/anotherRandomPersonlol/SketchFabModelRipping
-// @version      1.7.1
+// @version      1.7.2
 // @description  Download Sketchfab models as GLB or FBX: skeleton, recorded animation clips, PBR textures, vertex colours, morph targets
 // @name:pl         Sketchfab Ripper
 // @description:pl  Pobieraj modele ze Sketchfab jako GLB lub FBX: szkielet, nagrane klipy animacji, tekstury PBR, kolory wierzchołków, klucze kształtu
@@ -78,6 +78,7 @@
         DROP_STRIP_SLIVERS: true,   // drop long, near-zero-width bridging triangles inside triangle strips (the "stripes")
         REDUCE_KEYS: true,          // drop keyframes that interpolation between the kept keys already reproduces (tolerance scales with the model size)
         KEEP_STILL_CLIPS: false,    // true: a clip in which no joint moves is exported as a pose clip (2 equal keys); false: such clips are left out
+        EXPORT_ANNOTATIONS: false,  // true: each Sketchfab annotation becomes an empty node (title as name, text and camera view in extras)
         DOUBLE_SIDED_AUTO: true,    // true: follow the viewer's Single Sided flag per material (cullFace != 0 -> single sided); false: use DOUBLE_SIDED for all
         LANGUAGE: 'auto',           // panel language: 'auto' (browser language) or a key of STRINGS ('en', 'pl')
         DOUBLE_SIDED: true          // true: mark every material doubleSided (matches Sketchfab's default, Single Sided OFF); untick for single-sided export
@@ -206,6 +207,8 @@
             set_reduce_tip: 'On: leaves out animation keys that the keys before and after them already give. The file is about half as large. Off: keeps every recorded frame.',
             set_still: 'Keep still clips:',
             set_still_tip: 'On: a clip in which no joint moves (a pose clip) is exported as a pose of the skeleton. Off: such clips are left out of the file.',
+            set_annot: 'Export annotations:',
+            set_annot_tip: 'On: each annotation of the model becomes an empty object at its point, named after its title. The text and the camera view are kept as custom properties. Off: annotations are not exported.',
             set_vcolor: 'Vertex color sRGB>linear:',
             set_vcolor_tip: 'On: converts vertex colors to linear color, as glTF requires. The colors then look as in the viewer. Off: writes the colors unchanged.',
             set_flat_mr: 'Flat metal/rough from viewer:',
@@ -299,6 +302,8 @@
             set_reduce_tip: 'Włączone: pomija klucze animacji, które już wynikają z kluczy przed nimi i po nich. Plik jest mniej więcej o połowę mniejszy. Wyłączone: zostawia każdą nagraną klatkę.',
             set_still: 'Zachowaj nieruchome klipy:',
             set_still_tip: 'Włączone: klip, w którym żadna kość się nie porusza (klip pozy), jest eksportowany jako poza szkieletu. Wyłączone: takie klipy są pomijane.',
+            set_annot: 'Eksportuj adnotacje:',
+            set_annot_tip: 'Włączone: każda adnotacja modelu staje się pustym obiektem w swoim punkcie, nazwanym jej tytułem. Tekst i widok kamery są zapisane jako własne właściwości. Wyłączone: adnotacje nie są eksportowane.',
             set_vcolor: 'Kolory wierzchołków sRGB>liniowe:',
             set_vcolor_tip: 'Włączone: zamienia kolory wierzchołków na liniowe, jak wymaga glTF. Kolory wyglądają wtedy tak jak w podglądzie 3D. Wyłączone: zapisuje kolory bez zmian.',
             set_flat_mr: 'Metaliczność/szorstkość z podglądu:',
@@ -392,6 +397,8 @@
             set_reduce_tip: 'Вкл.: пропускает ключи анимации, которые уже следуют из ключей до и после них. Файл примерно вдвое меньше. Выкл.: оставляет каждый записанный кадр.',
             set_still: 'Оставлять неподвижные клипы:',
             set_still_tip: 'Вкл.: клип, в котором ни одна кость не движется (клип позы), экспортируется как поза скелета. Выкл.: такие клипы не попадают в файл.',
+            set_annot: 'Экспортировать аннотации:',
+            set_annot_tip: 'Вкл.: каждая аннотация модели становится пустым объектом в своей точке с её заголовком в качестве имени. Текст и вид камеры сохраняются как пользовательские свойства. Выкл.: аннотации не экспортируются.',
             set_vcolor: 'Цвета вершин sRGB>линейные:',
             set_vcolor_tip: 'Вкл.: переводит цвета вершин в линейные, как требует glTF. Тогда цвета выглядят как в 3D-просмотре. Выкл.: записывает цвета без изменений.',
             set_flat_mr: 'Металличность/шероховатость из 3D-просмотра:',
@@ -485,6 +492,8 @@
             set_reduce_tip: 'オン: 前後のキーから求められるアニメーションキーを省きます。ファイルは約半分になります。オフ: 録画したすべてのフレームを残します。',
             set_still: '静止クリップを残す:',
             set_still_tip: 'オン: どのボーンも動かないクリップ (ポーズクリップ) をスケルトンのポーズとしてエクスポートします。オフ: そのようなクリップはファイルに入れません。',
+            set_annot: '注釈をエクスポート:',
+            set_annot_tip: 'オン: モデルの各注釈が、その位置に注釈のタイトルを名前とする空のオブジェクトとして出力されます。テキストとカメラの視点はカスタムプロパティとして保存されます。オフ: 注釈はエクスポートしません。',
             set_vcolor: '頂点カラー sRGB>リニア:',
             set_vcolor_tip: 'オン: glTF の仕様どおり頂点カラーをリニアに変換します。色が3Dビューアーと同じに見えます。オフ: 色をそのまま書き出します。',
             set_flat_mr: '3Dビューアーのメタリック/ラフネス:',
@@ -578,6 +587,8 @@
             set_reduce_tip: '켜짐: 앞뒤 키로 이미 알 수 있는 애니메이션 키를 뺍니다. 파일이 절반쯤 작아집니다. 꺼짐: 녹화한 모든 프레임을 남깁니다.',
             set_still: '정지 클립 유지:',
             set_still_tip: '켜짐: 움직이는 본이 없는 클립(포즈 클립)을 스켈레톤 포즈로 내보냅니다. 꺼짐: 그런 클립은 파일에 넣지 않습니다.',
+            set_annot: '주석 내보내기:',
+            set_annot_tip: '켜짐: 모델의 각 주석이 해당 지점에 주석 제목을 이름으로 하는 빈 오브젝트가 됩니다. 텍스트와 카메라 시점은 사용자 지정 속성으로 저장됩니다. 꺼짐: 주석을 내보내지 않습니다.',
             set_vcolor: '버텍스 컬러 sRGB>선형:',
             set_vcolor_tip: '켜짐: glTF 규칙대로 버텍스 컬러를 선형으로 바꿉니다. 그러면 색이 3D 뷰어와 같아 보입니다. 꺼짐: 색을 그대로 씁니다.',
             set_flat_mr: '3D 뷰어의 메탈릭/러프니스:',
@@ -671,6 +682,8 @@
             set_reduce_tip: 'Activado: omite las claves de animación que ya se deducen de las claves anteriores y posteriores. El archivo ocupa más o menos la mitad. Desactivado: conserva cada fotograma grabado.',
             set_still: 'Conservar clips quietos:',
             set_still_tip: 'Activado: un clip en el que ningún hueso se mueve (un clip de pose) se exporta como una pose del esqueleto. Desactivado: esos clips no se incluyen en el archivo.',
+            set_annot: 'Exportar anotaciones:',
+            set_annot_tip: 'Activado: cada anotación del modelo se convierte en un objeto vacío en su punto, con su título como nombre. El texto y la vista de cámara se guardan como propiedades personalizadas. Desactivado: las anotaciones no se exportan.',
             set_vcolor: 'Color de vértices sRGB>lineal:',
             set_vcolor_tip: 'Activado: convierte los colores de vértice a lineales, como exige glTF. Así los colores se ven como en el visor 3D. Desactivado: escribe los colores sin cambios.',
             set_flat_mr: 'Metálico/rugosidad del visor:',
@@ -764,6 +777,8 @@
             set_reduce_tip: 'Ligado: deixa de fora as chaves de animação que já resultam das chaves antes e depois delas. O arquivo fica com cerca de metade do tamanho. Desligado: mantém cada quadro gravado.',
             set_still: 'Manter clipes parados:',
             set_still_tip: 'Ligado: um clipe em que nenhum osso se move (um clipe de pose) é exportado como uma pose do esqueleto. Desligado: esses clipes ficam fora do arquivo.',
+            set_annot: 'Exportar anotações:',
+            set_annot_tip: 'Ligado: cada anotação do modelo vira um objeto vazio no seu ponto, com o título como nome. O texto e a vista da câmera ficam guardados como propriedades personalizadas. Desligado: as anotações não são exportadas.',
             set_vcolor: 'Cor de vértice sRGB>linear:',
             set_vcolor_tip: 'Ligado: converte as cores de vértice para linear, como o glTF exige. As cores ficam como no visualizador 3D. Desligado: grava as cores sem mudança.',
             set_flat_mr: 'Metálico/rugosidade do visualizador:',
@@ -857,6 +872,8 @@
             set_reduce_tip: 'An: lässt Animationskeys weg, die sich schon aus den Keys davor und danach ergeben. Die Datei ist etwa halb so groß. Aus: behält jeden aufgenommenen Frame.',
             set_still: 'Unbewegte Clips behalten:',
             set_still_tip: 'An: ein Clip, in dem sich kein Knochen bewegt (ein Posen-Clip), wird als Pose des Skeletts exportiert. Aus: solche Clips kommen nicht in die Datei.',
+            set_annot: 'Anmerkungen exportieren:',
+            set_annot_tip: 'An: jede Anmerkung des Modells wird ein leeres Objekt an ihrem Punkt, benannt nach ihrem Titel. Text und Kameraansicht werden als benutzerdefinierte Eigenschaften gespeichert. Aus: Anmerkungen werden nicht exportiert.',
             set_vcolor: 'Vertexfarben sRGB>linear:',
             set_vcolor_tip: 'An: wandelt Vertexfarben in lineare Farben um, wie glTF es verlangt. Die Farben sehen dann aus wie in der 3D-Ansicht. Aus: schreibt die Farben unverändert.',
             set_flat_mr: 'Metallic/Roughness aus der 3D-Ansicht:',
@@ -950,6 +967,8 @@
             set_reduce_tip: 'Activé : omet les clés d’animation que les clés avant et après donnent déjà. Le fichier est environ deux fois plus petit. Désactivé : garde chaque image enregistrée.',
             set_still: 'Garder les clips immobiles :',
             set_still_tip: 'Activé : un clip où aucun os ne bouge (un clip de pose) est exporté comme une pose du squelette. Désactivé : ces clips ne sont pas mis dans le fichier.',
+            set_annot: 'Exporter les annotations :',
+            set_annot_tip: 'Activé : chaque annotation du modèle devient un objet vide à son point, nommé d\'après son titre. Le texte et la vue caméra sont gardés comme propriétés personnalisées. Désactivé : les annotations ne sont pas exportées.',
             set_vcolor: 'Couleurs de sommets sRGB>linéaire :',
             set_vcolor_tip: 'Activé : convertit les couleurs de sommets en couleurs linéaires, comme glTF l’exige. Les couleurs ressemblent alors à celles de la visionneuse 3D. Désactivé : écrit les couleurs sans changement.',
             set_flat_mr: 'Métal/rugosité de la visionneuse :',
@@ -1043,6 +1062,8 @@
             set_reduce_tip: "开：省略前后关键帧已能确定其值的动画关键帧。文件约缩小一半。关：保留每个录制帧。",
             set_still: "保留静止片段：",
             set_still_tip: "开：没有任何关节移动的片段（姿态片段）会作为骨骼姿态导出。关：此类片段不会写入文件。",
+            set_annot: "导出注释：",
+            set_annot_tip: "开：模型的每个注释都会在其位置成为一个以注释标题命名的空对象，文字和相机视角保存为自定义属性。关：不导出注释。",
             set_vcolor: "顶点颜色 sRGB>线性：",
             set_vcolor_tip: "开：按 glTF 要求将顶点颜色转换为线性颜色。颜色随后会与 3D 查看器中一致。关：颜色保持不变写入。",
             set_flat_mr: "使用 3D 查看器的金属度/粗糙度：",
@@ -1445,6 +1466,36 @@
         return null;
     }
 
+    // Matcap shading: the viewer takes the colour from the matcap image (a lit sphere), not from the
+    // base colour. glTF/FBX have no matcap, so the export uses the image's mean colour in the middle
+    // of the sphere (surfaces that face the viewer), times the matcap tint, as a flat base colour.
+    // Returns linear RGB, or null when the image is not loaded or cannot be read.
+    function matcapBaseColor(info, tint) {
+        const im = info && info.img, el = im && (im._imageObject || im._image || im._canvas);
+        if (!el) return null;
+        try {
+            const N = 64, c = document.createElement('canvas');
+            c.width = c.height = N;
+            const g = c.getContext('2d');
+            g.drawImage(el, 0, 0, N, N);
+            const px = g.getImageData(0, 0, N, N).data, sum = [0, 0, 0];
+            let n = 0;
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+                const dx = x + 0.5 - N / 2, dy = y + 0.5 - N / 2;
+                if (dx * dx + dy * dy > (N / 4) * (N / 4)) continue;   // inner half of the sphere
+                const i = (y * N + x) * 4;
+                sum[0] += px[i]; sum[1] += px[i + 1]; sum[2] += px[i + 2]; n++;
+            }
+            if (!n) return null;
+            const t = tint || [1, 1, 1];
+            const lin = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+            return sum.map((v, k) => Math.min(1, lin(v / n / 255) * (typeof t[k] === 'number' ? t[k] : 1)));
+        } catch (e) {
+            warn('matcap colour: cannot read the matcap image (' + e.message + ')');
+            return null;
+        }
+    }
+
     function getChannelTextureMap(obj) {
         const map = {};
         try {
@@ -1467,6 +1518,7 @@
                     const img = packed.texture._image;
                     const imM = packed.texture._imageModel;
                     map[chName] = {
+                        img,   // osg image (its _imageObject is the loaded <img>), used for the matcap colour
                         url : img && (img._url || img.url),
                         name: imM && imM.attributes && imM.attributes.name,
                         // Texture-less materials: Sketchfab packs the flat colours into a generated
@@ -1755,13 +1807,37 @@
         return parts.join(',');
     }
 
+    // True when a node named "Scene - RootModel" (the root of the uploaded model) is above obj.
+    // The viewer's helper nodes (hotspots, outline, ground) are not under it.
+    function underModelRoot(obj) {
+        let cur = obj && obj._parents && obj._parents[0], guard = 0;
+        while (cur && guard++ < 256) {
+            if (cur._name === 'Scene - RootModel') return true;
+            cur = cur._parents && cur._parents[0];
+        }
+        return false;
+    }
+
     window.attachbody = (obj) => {
         try {
             if (!obj || obj._faked === true) return;
             const name = obj._name;
             const ssName = obj.stateset && obj.stateset._name;
             const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
-            if (!name && !ssName && !pName) return;
+            if (!name && !ssName && !pName) {
+                // A mesh with no name at all. The viewer's own helpers (annotation hotspot quads and
+                // similar) are like that, but so is a model uploaded as one unnamed mesh (a 3D scan).
+                // Keep it when it sits under the model's root node; skip it once (and say so) otherwise.
+                if (obj._ripSkip) return;
+                if (!underModelRoot(obj)) {
+                    obj._ripSkip = true;
+                    const v = obj._attributes && obj._attributes.Vertex && obj._attributes.Vertex._elements;
+                    log(`attachbody: unnamed mesh outside the model skipped (${v ? v.length / 3 : 0} vertices, viewer helper)`);
+                    return;
+                }
+                const v = obj._attributes && obj._attributes.Vertex && obj._attributes.Vertex._elements;
+                log(`attachbody: unnamed mesh under the model root kept (${v ? v.length / 3 : 0} vertices)`);
+            }
             obj._faked = true;
             if (name === 'composer layer' || name === 'Ground - Geometry') return;
             
@@ -2508,20 +2584,24 @@
     // burst while the model loads (and lags most). Exporting before that burst
     // ends produces a GLB with missing images. Count what the meshes reference
     // against what has been captured, and wait a little if some are missing.
+    // Counts only the channels the export uses: the viewer's Matcap/Inspector channels and the
+    // generated colour atlas of texture-less materials are skipped (the builder skips them too),
+    // or a model with no textures waits for the full timeout.
     function textureReadiness() {
-        let seen = {}, expected = 0, missing = 0;
+        let seen = {}, expected = 0, missing = 0, missingCh = {};
         window.allmodel.forEach((obj) => {
             const cm = getChannelTextureMap(obj);
             for (let ch in cm) {
                 if (!cm.hasOwnProperty(ch) || !cm[ch] || !cm[ch].url) continue;
+                if (cm[ch].atlas || ch === 'Matcap' || ch === 'Inspector') continue;
                 const id = _urlTail(cm[ch].url) || normalizeUrl(cm[ch].url);
                 if (seen[id]) continue;
                 seen[id] = true;
                 expected++;
-                if (!_blobForUrl(cm[ch].url)) missing++;
+                if (!_blobForUrl(cm[ch].url)) { missing++; missingCh[ch] = true; }
             }
         });
-        return { expected, missing };
+        return { expected, missing, channels: Object.keys(missingCh) };
     }
 
     // onProg(captured, expected, secondsLeft)
@@ -2532,7 +2612,8 @@
         report(first, maxMs / 1000);
         if (maxMs <= 0 || first.missing === 0) return Promise.resolve();
         log('textures still loading: ' + (first.expected - first.missing) + '/' + first.expected +
-            ' captured, waiting up to ' + CONFIG.TEXTURE_WAIT_SECONDS + 's (keep this tab visible)');
+            ' captured (missing channels: ' + first.channels.join(', ') + '), waiting up to ' +
+            CONFIG.TEXTURE_WAIT_SECONDS + 's (keep this tab visible)');
         return new Promise((resolve) => {
             let start = Date.now(), lastProgressAt = start, lastCaptured = first.expected - first.missing;
             (function poll() {
@@ -3132,7 +3213,7 @@
             if (!matsChannelInfo.hasOwnProperty(cmi) || !matsChannelInfo[cmi]) continue;
             for (let ck in matsChannelInfo[cmi]) {
                 const ci = matsChannelInfo[cmi][ck];
-                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
+                if (matsChannelInfo[cmi].hasOwnProperty(ck) && ck !== 'Matcap' && ck !== 'Inspector' && ci && (ci.url || ci.name) && !ci.atlas) anyRealTex = true;
             }
         }
         if (!textures.length && mats.length && anyRealTex) warn('no textures were captured at all: reload the page, wait until the model is fully shown, then export (see tools/probe-textures.js if it keeps happening)');
@@ -3237,6 +3318,16 @@
                 const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
                 pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
                 did.push('base color');
+            }
+            const mc = flat.Matcap;
+            if (mc && mc.enable && cmap && cmap.Matcap >= 0 && !pbr.baseColorTexture && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
+                const col = matcapBaseColor(chan.Matcap, mc.color);
+                if (col) {
+                    const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
+                    pbr.baseColorFactor = [col[0], col[1], col[2], aa];
+                    if (did[did.length - 1] === 'base color') did.pop();   // replaced by the matcap colour
+                    did.push('base color from matcap ' + col.map((v) => v.toFixed(3)).join(','));
+                }
             }
             const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
             // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
@@ -4098,6 +4189,16 @@
                 if (animList.length) animations = animList;
             }
 
+            // Annotations: a group node with one empty per annotation (a natural root, so it goes
+            // under scene_root with the meshes and gets the same Y-up and scale).
+            const annNodes = annotationNodes();
+            if (annNodes.length) {
+                const first = nodes.length + 1;
+                nodes.push({ name: 'annotations', children: annNodes.map((_, k) => first + k) });
+                annNodes.forEach((n) => nodes.push(n));
+                log(`annotations: ${annNodes.length} exported as empty nodes`);
+            }
+
             // Scene root with YUP
             let sceneRootIdx = nodes.length;
             const rootMat = YUP.slice();
@@ -4185,6 +4286,71 @@
     }
 
     // ====================================================================
+    // Annotations (Sketchfab hotspots), read at export when EXPORT_ANNOTATIONS is on
+    // ====================================================================
+    // The viewer loads them from /i/models/<uid>/hotspots: { results: [{ name, content: { raw },
+    // position, eye, target, ... }] }. Positions are in the model space under "Scene - RootModel"
+    // (before the model's orientation); the world matrix of that node maps them onto the viewer's
+    // markers (probe-annotation-space.js), which is the space of the exported meshes.
+    let _annotations = [];
+    function modelUid() {
+        const m = location.pathname.match(/[0-9a-f]{32}/gi);
+        return m ? m[m.length - 1] : null;
+    }
+    function fetchAnnotations() {
+        _annotations = [];
+        if (!CONFIG.EXPORT_ANNOTATIONS) return Promise.resolve();
+        const uid = modelUid();
+        if (!uid) { warn('annotations: model id not found in the page address, annotations not exported'); return Promise.resolve(); }
+        const all = [];
+        const page = (url, left) => fetch(url, { credentials: 'include' })
+            .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then((j) => {
+                (j && j.results || []).forEach((a) => all.push(a));
+                if (j && j.next && left > 0) return page(j.next, left - 1);
+            });
+        return page(`/i/models/${uid}/hotspots`, 10)
+            .then(() => { _annotations = all; log(`annotations: ${all.length} read`); })
+            .catch((e) => warn('annotations could not be read, exporting without them:', e.message));
+    }
+    // World matrix of the "Scene - RootModel" node above the captured meshes, or null.
+    function modelRootWorld() {
+        const list = window.allmodel || [];
+        for (let i = 0; i < list.length; i++) {
+            let cur = list[i] && list[i]._parents && list[i]._parents[0], g = 0;
+            while (cur && g++ < 256) {
+                if (cur._name === 'Scene - RootModel') return computeWorldMatrix(cur);
+                cur = cur._parents && cur._parents[0];
+            }
+        }
+        return null;
+    }
+    // Empty glTF nodes for the annotations: one group node with a child per annotation.
+    function annotationNodes() {
+        if (!_annotations.length) return [];
+        let W = modelRootWorld();
+        if (!W) { warn('annotations: no "Scene - RootModel" node above the meshes, positions may be off'); W = identityMat4(); }
+        const xf = (p) => {
+            if (!Array.isArray(p) || p.length < 3) return null;
+            return [0, 1, 2].map((r) => W[r] * p[0] + W[4 + r] * p[1] + W[8 + r] * p[2] + W[12 + r]);
+        };
+        const out = [];
+        _annotations.forEach((a, i) => {
+            const t = xf(a.position);
+            if (!t) return;
+            const title = String(a.name || '').trim() || `Annotation ${i + 1}`;
+            const info = { index: i + 1, title };
+            const text = a.content && typeof a.content.raw === 'string' ? a.content.raw : '';
+            if (text) info.text = text;
+            const eye = xf(a.eye), target = xf(a.target);
+            if (eye) info.eye = eye;
+            if (target) info.target = target;
+            out.push({ name: `${i + 1}. ${title}`, translation: t, extras: { sketchfabAnnotation: info } });
+        });
+        return out;
+    }
+
+    // ====================================================================
     // Export: GLB and FBX downloads
     // ====================================================================
     // format: 'glb' or 'fbx'. Both build the same glTF first; FBX is converted from it.
@@ -4205,6 +4371,7 @@
             else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
             else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
         })
+            .then(() => fetchAnnotations())
             .then(() => {
                 stage(1);
                 // two parts: metal/rough maps, then opacity into base colour alpha
@@ -4488,6 +4655,11 @@
                 '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
                 '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
                 '#ripper-panel.rp-wide{width:270px}',
+                // Small screens: the panel stays inside the window. The settings list scrolls first,
+                // the panel itself scrolls only if the buttons alone do not fit (fitPanel sets max-height).
+                '#ripper-panel{max-height:calc(100vh - 86px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#5f6368 transparent}',
+                '#ripper-panel>*{flex-shrink:0}',
+                '#ripper-panel>#ripper-config{flex-shrink:1;min-height:90px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#5f6368 transparent}',
                 '#ripper-config>div>span{flex:1;min-width:0}',
                 '#ripper-config select{max-width:55%}',
                 '#ripper-config .rp-set{display:flex;justify-content:space-between;align-items:center;gap:6px}',
@@ -4632,6 +4804,7 @@
         checkSetting(configDiv, 'DROP_STRIP_SLIVERS', 'set_slivers', 'drop strip slivers');
         checkSetting(configDiv, 'REDUCE_KEYS', 'set_reduce', 'reduce keyframes');
         checkSetting(configDiv, 'KEEP_STILL_CLIPS', 'set_still', 'keep still clips');
+        checkSetting(configDiv, 'EXPORT_ANNOTATIONS', 'set_annot', 'export annotations');
         checkSetting(configDiv, 'VERTEX_COLOR_SRGB', 'set_vcolor', 'vertex color sRGB->linear');
         checkSetting(configDiv, 'FLAT_MR_FROM_VIEWER', 'set_flat_mr', 'flat metal/rough from viewer');
 
@@ -4667,12 +4840,14 @@
             const open = configDiv.style.display === 'none';
             configDiv.style.display = open ? 'flex' : 'none';
             panel.classList.toggle('rp-wide', open);
+            fitPanel(panel, true);
         });
         if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
         if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
 
         document.body.appendChild(panel);
         makeDraggable(panel, title);
+        fitPanel(panel, true);
         button_dw = true;
         log(`panel added (language ${uiLang()})`);
         if (rebuilt) return;   // the checks below run once per page
@@ -4716,16 +4891,38 @@
         document.addEventListener('mousemove', (e) => {
             const d = _panelDrag;
             if (!d) return;
+            // The title stays inside the window, so the panel can always be dragged back.
+            const top = Math.max(0, Math.min(window.innerHeight - 68, e.clientY - d.oy));
             d.el.style.left = `${e.clientX - d.ox}px`;
-            d.el.style.top  = `${e.clientY - d.oy}px`;
+            d.el.style.top  = `${top}px`;
             d.el.style.right = 'auto';
+            fitPanel(d.el, false);
         });
         document.addEventListener('mouseup', () => { _panelDrag = null; });
+        window.addEventListener('resize', () => fitPanel(document.getElementById('ripper-panel'), true));
     }
 
     // Drag state of the panel title. The mousedown handler is set on every
     // build (also after a language change), so a rebuilt panel can be moved too.
     let _panelDrag = null;   // { el, ox, oy } while the title is held
+
+    // Limits the panel height to the window space below its top edge (the content scrolls).
+    // moveUp: if the panel runs past the bottom edge, move it up as far as needed
+    // (not while the user drags it).
+    function fitPanel(p, moveUp) {
+        if (!p || !p.isConnected) return;
+        const vh = window.innerHeight, margin = 8;
+        let top = p.getBoundingClientRect().top;
+        if (moveUp) {
+            p.style.maxHeight = 'none';
+            const need = p.offsetHeight;
+            if (top + need > vh - margin && top > margin) {
+                top = Math.max(margin, vh - margin - need);
+                p.style.top = `${top}px`;
+            }
+        }
+        p.style.maxHeight = `${Math.max(60, vh - top - margin)}px`;
+    }
     function makeDraggable(el, handle) {
         handle.addEventListener('mousedown', (e) => {
             _panelDrag = { el, ox: e.clientX - el.offsetLeft, oy: e.clientY - el.offsetTop };

@@ -88,6 +88,7 @@ Click the gear icon in the panel. The script keeps your settings for the next vi
 | Drop strip slivers (stripes) | On | Removes long thin triangles that connect separate parts. |
 | Reduce keyframes | On | Leaves out animation keys that the keys before and after them already give. The file gets about half as large. Turn it off if an animation looks wrong. |
 | Keep still clips | Off | A clip in which no joint moves (a pose clip) becomes a pose of the skeleton, with two equal keys. Off: such clips are left out of the file. |
+| Export annotations | Off | Each annotation of the model becomes an empty object at its point, named after its title ("1. Title", in an `annotations` group). Its text and camera view (`eye`, `target`) are kept in the node's extras (custom properties in Blender). |
 | Vertex color sRGB>linear | On | Converts vertex colors to the color space that glTF uses. |
 | Flat metal/rough from viewer | On | Uses the metalness and roughness values of the viewer for materials without textures. |
 | Export scale | 1 | Multiplies the size of the model. Use 0.01 for a model in centimeters. |
