@@ -2532,20 +2532,24 @@
     // burst while the model loads (and lags most). Exporting before that burst
     // ends produces a GLB with missing images. Count what the meshes reference
     // against what has been captured, and wait a little if some are missing.
+    // Counts only the channels the export uses: the viewer's Matcap/Inspector channels and the
+    // generated colour atlas of texture-less materials are skipped (the builder skips them too),
+    // or a model with no textures waits for the full timeout.
     function textureReadiness() {
-        let seen = {}, expected = 0, missing = 0;
+        let seen = {}, expected = 0, missing = 0, missingCh = {};
         window.allmodel.forEach((obj) => {
             const cm = getChannelTextureMap(obj);
             for (let ch in cm) {
                 if (!cm.hasOwnProperty(ch) || !cm[ch] || !cm[ch].url) continue;
+                if (cm[ch].atlas || ch === 'Matcap' || ch === 'Inspector') continue;
                 const id = _urlTail(cm[ch].url) || normalizeUrl(cm[ch].url);
                 if (seen[id]) continue;
                 seen[id] = true;
                 expected++;
-                if (!_blobForUrl(cm[ch].url)) missing++;
+                if (!_blobForUrl(cm[ch].url)) { missing++; missingCh[ch] = true; }
             }
         });
-        return { expected, missing };
+        return { expected, missing, channels: Object.keys(missingCh) };
     }
 
     // onProg(captured, expected, secondsLeft)
@@ -2556,7 +2560,8 @@
         report(first, maxMs / 1000);
         if (maxMs <= 0 || first.missing === 0) return Promise.resolve();
         log('textures still loading: ' + (first.expected - first.missing) + '/' + first.expected +
-            ' captured, waiting up to ' + CONFIG.TEXTURE_WAIT_SECONDS + 's (keep this tab visible)');
+            ' captured (missing channels: ' + first.channels.join(', ') + '), waiting up to ' +
+            CONFIG.TEXTURE_WAIT_SECONDS + 's (keep this tab visible)');
         return new Promise((resolve) => {
             let start = Date.now(), lastProgressAt = start, lastCaptured = first.expected - first.missing;
             (function poll() {
@@ -4512,6 +4517,11 @@
                 '#ripper-progress.rp-err .rp-fill{background:#f28b82}',
                 '#ripper-status{font-size:10px;color:#9aa0a6;text-align:center}',
                 '#ripper-panel.rp-wide{width:270px}',
+                // Small screens: the panel stays inside the window. The settings list scrolls first,
+                // the panel itself scrolls only if the buttons alone do not fit (fitPanel sets max-height).
+                '#ripper-panel{max-height:calc(100vh - 86px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#5f6368 transparent}',
+                '#ripper-panel>*{flex-shrink:0}',
+                '#ripper-panel>#ripper-config{flex-shrink:1;min-height:90px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#5f6368 transparent}',
                 '#ripper-config>div>span{flex:1;min-width:0}',
                 '#ripper-config select{max-width:55%}',
                 '#ripper-config .rp-set{display:flex;justify-content:space-between;align-items:center;gap:6px}',
@@ -4691,12 +4701,14 @@
             const open = configDiv.style.display === 'none';
             configDiv.style.display = open ? 'flex' : 'none';
             panel.classList.toggle('rp-wide', open);
+            fitPanel(panel, true);
         });
         if (keepOpen) { configDiv.style.display = 'flex'; panel.classList.add('rp-wide'); }
         if (keepPos) { panel.style.left = keepPos.left; panel.style.top = keepPos.top; panel.style.right = keepPos.right; }
 
         document.body.appendChild(panel);
         makeDraggable(panel, title);
+        fitPanel(panel, true);
         button_dw = true;
         log(`panel added (language ${uiLang()})`);
         if (rebuilt) return;   // the checks below run once per page
@@ -4740,16 +4752,38 @@
         document.addEventListener('mousemove', (e) => {
             const d = _panelDrag;
             if (!d) return;
+            // The title stays inside the window, so the panel can always be dragged back.
+            const top = Math.max(0, Math.min(window.innerHeight - 68, e.clientY - d.oy));
             d.el.style.left = `${e.clientX - d.ox}px`;
-            d.el.style.top  = `${e.clientY - d.oy}px`;
+            d.el.style.top  = `${top}px`;
             d.el.style.right = 'auto';
+            fitPanel(d.el, false);
         });
         document.addEventListener('mouseup', () => { _panelDrag = null; });
+        window.addEventListener('resize', () => fitPanel(document.getElementById('ripper-panel'), true));
     }
 
     // Drag state of the panel title. The mousedown handler is set on every
     // build (also after a language change), so a rebuilt panel can be moved too.
     let _panelDrag = null;   // { el, ox, oy } while the title is held
+
+    // Limits the panel height to the window space below its top edge (the content scrolls).
+    // moveUp: if the panel runs past the bottom edge, move it up as far as needed
+    // (not while the user drags it).
+    function fitPanel(p, moveUp) {
+        if (!p || !p.isConnected) return;
+        const vh = window.innerHeight, margin = 8;
+        let top = p.getBoundingClientRect().top;
+        if (moveUp) {
+            p.style.maxHeight = 'none';
+            const need = p.offsetHeight;
+            if (top + need > vh - margin && top > margin) {
+                top = Math.max(margin, vh - margin - need);
+                p.style.top = `${top}px`;
+            }
+        }
+        p.style.maxHeight = `${Math.max(60, vh - top - margin)}px`;
+    }
     function makeDraggable(el, handle) {
         handle.addEventListener('mousedown', (e) => {
             _panelDrag = { el, ox: e.clientX - el.offsetLeft, oy: e.clientY - el.offsetTop };
