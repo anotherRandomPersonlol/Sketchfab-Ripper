@@ -1445,6 +1445,36 @@
         return null;
     }
 
+    // Matcap shading: the viewer takes the colour from the matcap image (a lit sphere), not from the
+    // base colour. glTF/FBX have no matcap, so the export uses the image's mean colour in the middle
+    // of the sphere (surfaces that face the viewer), times the matcap tint, as a flat base colour.
+    // Returns linear RGB, or null when the image is not loaded or cannot be read.
+    function matcapBaseColor(info, tint) {
+        const im = info && info.img, el = im && (im._imageObject || im._image || im._canvas);
+        if (!el) return null;
+        try {
+            const N = 64, c = document.createElement('canvas');
+            c.width = c.height = N;
+            const g = c.getContext('2d');
+            g.drawImage(el, 0, 0, N, N);
+            const px = g.getImageData(0, 0, N, N).data, sum = [0, 0, 0];
+            let n = 0;
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+                const dx = x + 0.5 - N / 2, dy = y + 0.5 - N / 2;
+                if (dx * dx + dy * dy > (N / 4) * (N / 4)) continue;   // inner half of the sphere
+                const i = (y * N + x) * 4;
+                sum[0] += px[i]; sum[1] += px[i + 1]; sum[2] += px[i + 2]; n++;
+            }
+            if (!n) return null;
+            const t = tint || [1, 1, 1];
+            const lin = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+            return sum.map((v, k) => Math.min(1, lin(v / n / 255) * (typeof t[k] === 'number' ? t[k] : 1)));
+        } catch (e) {
+            warn('matcap colour: cannot read the matcap image (' + e.message + ')');
+            return null;
+        }
+    }
+
     function getChannelTextureMap(obj) {
         const map = {};
         try {
@@ -1467,6 +1497,7 @@
                     const img = packed.texture._image;
                     const imM = packed.texture._imageModel;
                     map[chName] = {
+                        img,   // osg image (its _imageObject is the loaded <img>), used for the matcap colour
                         url : img && (img._url || img.url),
                         name: imM && imM.attributes && imM.attributes.name,
                         // Texture-less materials: Sketchfab packs the flat colours into a generated
@@ -3266,6 +3297,16 @@
                 const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
                 pbr.baseColorFactor = [Math.min(1, ac[0] * af), Math.min(1, ac[1] * af), Math.min(1, ac[2] * af), aa];
                 did.push('base color');
+            }
+            const mc = flat.Matcap;
+            if (mc && mc.enable && cmap && cmap.Matcap >= 0 && !pbr.baseColorTexture && !texd('AlbedoPBR') && !texd('DiffusePBR')) {
+                const col = matcapBaseColor(chan.Matcap, mc.color);
+                if (col) {
+                    const aa = (pbr.baseColorFactor && pbr.baseColorFactor[3] !== undefined) ? pbr.baseColorFactor[3] : 1;
+                    pbr.baseColorFactor = [col[0], col[1], col[2], aa];
+                    if (did[did.length - 1] === 'base color') did.pop();   // replaced by the matcap colour
+                    did.push('base color from matcap ' + col.map((v) => v.toFixed(3)).join(','));
+                }
             }
             const mt = flat.MetalnessPBR, rg = flat.RoughnessPBR;
             // Merged MR image: a missing map is stored as 255, so the factor carries the flat value.
