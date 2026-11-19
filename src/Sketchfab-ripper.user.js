@@ -1755,13 +1755,37 @@
         return parts.join(',');
     }
 
+    // True when a node named "Scene - RootModel" (the root of the uploaded model) is above obj.
+    // The viewer's helper nodes (hotspots, outline, ground) are not under it.
+    function underModelRoot(obj) {
+        let cur = obj && obj._parents && obj._parents[0], guard = 0;
+        while (cur && guard++ < 256) {
+            if (cur._name === 'Scene - RootModel') return true;
+            cur = cur._parents && cur._parents[0];
+        }
+        return false;
+    }
+
     window.attachbody = (obj) => {
         try {
             if (!obj || obj._faked === true) return;
             const name = obj._name;
             const ssName = obj.stateset && obj.stateset._name;
             const pName = (obj._parents && obj._parents.length > 0 && obj._parents[0] && obj._parents[0]._name) || null;
-            if (!name && !ssName && !pName) return;
+            if (!name && !ssName && !pName) {
+                // A mesh with no name at all. The viewer's own helpers (annotation hotspot quads and
+                // similar) are like that, but so is a model uploaded as one unnamed mesh (a 3D scan).
+                // Keep it when it sits under the model's root node; skip it once (and say so) otherwise.
+                if (obj._ripSkip) return;
+                if (!underModelRoot(obj)) {
+                    obj._ripSkip = true;
+                    const v = obj._attributes && obj._attributes.Vertex && obj._attributes.Vertex._elements;
+                    log(`attachbody: unnamed mesh outside the model skipped (${v ? v.length / 3 : 0} vertices, viewer helper)`);
+                    return;
+                }
+                const v = obj._attributes && obj._attributes.Vertex && obj._attributes.Vertex._elements;
+                log(`attachbody: unnamed mesh under the model root kept (${v ? v.length / 3 : 0} vertices)`);
+            }
             obj._faked = true;
             if (name === 'composer layer' || name === 'Ground - Geometry') return;
             

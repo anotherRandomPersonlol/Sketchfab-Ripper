@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- A model uploaded as one mesh with no name (for example a 3D scan) is exported. Before, the script skipped every mesh without a name, so such a model gave an empty export ("meshes: 0" while the model was on screen). Unnamed meshes outside the model, such as the viewer's annotation markers, are still skipped, and both cases are logged.
+
 ## v1.7.1
 
 ### Fixed
