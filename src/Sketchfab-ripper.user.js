@@ -79,6 +79,7 @@
         REDUCE_KEYS: true,          // drop keyframes that interpolation between the kept keys already reproduces (tolerance scales with the model size)
         KEEP_STILL_CLIPS: false,    // true: a clip in which no joint moves is exported as a pose clip (2 equal keys); false: such clips are left out
         EXPORT_ANNOTATIONS: false,  // true: each Sketchfab annotation becomes an empty node (title as name, text and camera view in extras)
+        SPLIT_LOOSE_PARTS: false,   // true: the viewer's mesh pieces are joined again and split into one mesh per connected part
         DOUBLE_SIDED_AUTO: true,    // true: follow the viewer's Single Sided flag per material (cullFace != 0 -> single sided); false: use DOUBLE_SIDED for all
         LANGUAGE: 'auto',           // panel language: 'auto' (browser language) or a key of STRINGS ('en', 'pl')
         DOUBLE_SIDED: true          // true: mark every material doubleSided (matches Sketchfab's default, Single Sided OFF); untick for single-sided export
@@ -209,6 +210,8 @@
             set_still_tip: 'On: a clip in which no joint moves (a pose clip) is exported as a pose of the skeleton. Off: such clips are left out of the file.',
             set_annot: 'Export annotations:',
             set_annot_tip: 'On: each annotation of the model becomes an empty object at its point, named after its title. The text and the camera view are kept as custom properties. Off: annotations are not exported.',
+            set_split: 'Split into loose parts:',
+            set_split_tip: 'On: mesh pieces that the viewer cut apart are joined again, and every connected part becomes its own object (for example each tooth of a dental model). Animated meshes are left as they are. Off: the meshes are exported as the viewer holds them.',
             set_vcolor: 'Vertex color sRGB>linear:',
             set_vcolor_tip: 'On: converts vertex colors to linear color, as glTF requires. The colors then look as in the viewer. Off: writes the colors unchanged.',
             set_flat_mr: 'Flat metal/rough from viewer:',
@@ -304,6 +307,8 @@
             set_still_tip: 'Włączone: klip, w którym żadna kość się nie porusza (klip pozy), jest eksportowany jako poza szkieletu. Wyłączone: takie klipy są pomijane.',
             set_annot: 'Eksportuj adnotacje:',
             set_annot_tip: 'Włączone: każda adnotacja modelu staje się pustym obiektem w swoim punkcie, nazwanym jej tytułem. Tekst i widok kamery są zapisane jako własne właściwości. Wyłączone: adnotacje nie są eksportowane.',
+            set_split: 'Rozdziel na luźne części:',
+            set_split_tip: 'Włączone: kawałki siatki pocięte przez przeglądarkę są łączone z powrotem, a każda połączona część staje się osobnym obiektem (np. każdy ząb modelu stomatologicznego). Animowane siatki zostają bez zmian. Wyłączone: siatki są eksportowane tak, jak trzyma je przeglądarka.',
             set_vcolor: 'Kolory wierzchołków sRGB>liniowe:',
             set_vcolor_tip: 'Włączone: zamienia kolory wierzchołków na liniowe, jak wymaga glTF. Kolory wyglądają wtedy tak jak w podglądzie 3D. Wyłączone: zapisuje kolory bez zmian.',
             set_flat_mr: 'Metaliczność/szorstkość z podglądu:',
@@ -399,6 +404,8 @@
             set_still_tip: 'Вкл.: клип, в котором ни одна кость не движется (клип позы), экспортируется как поза скелета. Выкл.: такие клипы не попадают в файл.',
             set_annot: 'Экспортировать аннотации:',
             set_annot_tip: 'Вкл.: каждая аннотация модели становится пустым объектом в своей точке с её заголовком в качестве имени. Текст и вид камеры сохраняются как пользовательские свойства. Выкл.: аннотации не экспортируются.',
+            set_split: 'Разделить на отдельные части:',
+            set_split_tip: 'Вкл.: куски сетки, разрезанные просмотрщиком, снова соединяются, и каждая связная часть становится отдельным объектом (например, каждый зуб стоматологической модели). Анимированные сетки не меняются. Выкл.: сетки экспортируются так, как их хранит просмотрщик.',
             set_vcolor: 'Цвета вершин sRGB>линейные:',
             set_vcolor_tip: 'Вкл.: переводит цвета вершин в линейные, как требует glTF. Тогда цвета выглядят как в 3D-просмотре. Выкл.: записывает цвета без изменений.',
             set_flat_mr: 'Металличность/шероховатость из 3D-просмотра:',
@@ -494,6 +501,8 @@
             set_still_tip: 'オン: どのボーンも動かないクリップ (ポーズクリップ) をスケルトンのポーズとしてエクスポートします。オフ: そのようなクリップはファイルに入れません。',
             set_annot: '注釈をエクスポート:',
             set_annot_tip: 'オン: モデルの各注釈が、その位置に注釈のタイトルを名前とする空のオブジェクトとして出力されます。テキストとカメラの視点はカスタムプロパティとして保存されます。オフ: 注釈はエクスポートしません。',
+            set_split: 'ばらばらのパーツに分割:',
+            set_split_tip: 'オン: ビューアーが分割したメッシュの断片を結合し直し、つながった部分ごとに別のオブジェクトにします（例: 歯科モデルの歯 1 本ずつ）。アニメーションするメッシュはそのままです。オフ: ビューアーが持つままのメッシュを出力します。',
             set_vcolor: '頂点カラー sRGB>リニア:',
             set_vcolor_tip: 'オン: glTF の仕様どおり頂点カラーをリニアに変換します。色が3Dビューアーと同じに見えます。オフ: 色をそのまま書き出します。',
             set_flat_mr: '3Dビューアーのメタリック/ラフネス:',
@@ -589,6 +598,8 @@
             set_still_tip: '켜짐: 움직이는 본이 없는 클립(포즈 클립)을 스켈레톤 포즈로 내보냅니다. 꺼짐: 그런 클립은 파일에 넣지 않습니다.',
             set_annot: '주석 내보내기:',
             set_annot_tip: '켜짐: 모델의 각 주석이 해당 지점에 주석 제목을 이름으로 하는 빈 오브젝트가 됩니다. 텍스트와 카메라 시점은 사용자 지정 속성으로 저장됩니다. 꺼짐: 주석을 내보내지 않습니다.',
+            set_split: '분리된 부분으로 나누기:',
+            set_split_tip: '켜짐: 뷰어가 잘라 놓은 메시 조각을 다시 합치고, 연결된 부분마다 별도의 오브젝트로 만듭니다(예: 치아 모델의 치아 하나하나). 애니메이션 메시는 그대로 둡니다. 꺼짐: 뷰어가 가진 그대로 메시를 내보냅니다.',
             set_vcolor: '버텍스 컬러 sRGB>선형:',
             set_vcolor_tip: '켜짐: glTF 규칙대로 버텍스 컬러를 선형으로 바꿉니다. 그러면 색이 3D 뷰어와 같아 보입니다. 꺼짐: 색을 그대로 씁니다.',
             set_flat_mr: '3D 뷰어의 메탈릭/러프니스:',
@@ -684,6 +695,8 @@
             set_still_tip: 'Activado: un clip en el que ningún hueso se mueve (un clip de pose) se exporta como una pose del esqueleto. Desactivado: esos clips no se incluyen en el archivo.',
             set_annot: 'Exportar anotaciones:',
             set_annot_tip: 'Activado: cada anotación del modelo se convierte en un objeto vacío en su punto, con su título como nombre. El texto y la vista de cámara se guardan como propiedades personalizadas. Desactivado: las anotaciones no se exportan.',
+            set_split: 'Separar en partes sueltas:',
+            set_split_tip: 'Activado: los trozos de malla que el visor cortó se vuelven a unir y cada parte conectada pasa a ser su propio objeto (por ejemplo, cada diente de un modelo dental). Las mallas animadas no se tocan. Desactivado: las mallas se exportan tal como las tiene el visor.',
             set_vcolor: 'Color de vértices sRGB>lineal:',
             set_vcolor_tip: 'Activado: convierte los colores de vértice a lineales, como exige glTF. Así los colores se ven como en el visor 3D. Desactivado: escribe los colores sin cambios.',
             set_flat_mr: 'Metálico/rugosidad del visor:',
@@ -779,6 +792,8 @@
             set_still_tip: 'Ligado: um clipe em que nenhum osso se move (um clipe de pose) é exportado como uma pose do esqueleto. Desligado: esses clipes ficam fora do arquivo.',
             set_annot: 'Exportar anotações:',
             set_annot_tip: 'Ligado: cada anotação do modelo vira um objeto vazio no seu ponto, com o título como nome. O texto e a vista da câmera ficam guardados como propriedades personalizadas. Desligado: as anotações não são exportadas.',
+            set_split: 'Separar em partes soltas:',
+            set_split_tip: 'Ligado: os pedaços de malha que o visualizador cortou são unidos de novo, e cada parte conectada vira um objeto próprio (por exemplo, cada dente de um modelo dentário). Malhas animadas ficam como estão. Desligado: as malhas são exportadas como o visualizador as guarda.',
             set_vcolor: 'Cor de vértice sRGB>linear:',
             set_vcolor_tip: 'Ligado: converte as cores de vértice para linear, como o glTF exige. As cores ficam como no visualizador 3D. Desligado: grava as cores sem mudança.',
             set_flat_mr: 'Metálico/rugosidade do visualizador:',
@@ -874,6 +889,8 @@
             set_still_tip: 'An: ein Clip, in dem sich kein Knochen bewegt (ein Posen-Clip), wird als Pose des Skeletts exportiert. Aus: solche Clips kommen nicht in die Datei.',
             set_annot: 'Anmerkungen exportieren:',
             set_annot_tip: 'An: jede Anmerkung des Modells wird ein leeres Objekt an ihrem Punkt, benannt nach ihrem Titel. Text und Kameraansicht werden als benutzerdefinierte Eigenschaften gespeichert. Aus: Anmerkungen werden nicht exportiert.',
+            set_split: 'In lose Teile trennen:',
+            set_split_tip: 'An: Netzstücke, die der Viewer zerschnitten hat, werden wieder verbunden, und jedes zusammenhängende Teil wird ein eigenes Objekt (zum Beispiel jeder Zahn eines Zahnmodells). Animierte Netze bleiben unverändert. Aus: Die Netze werden so exportiert, wie der Viewer sie hält.',
             set_vcolor: 'Vertexfarben sRGB>linear:',
             set_vcolor_tip: 'An: wandelt Vertexfarben in lineare Farben um, wie glTF es verlangt. Die Farben sehen dann aus wie in der 3D-Ansicht. Aus: schreibt die Farben unverändert.',
             set_flat_mr: 'Metallic/Roughness aus der 3D-Ansicht:',
@@ -969,6 +986,8 @@
             set_still_tip: 'Activé : un clip où aucun os ne bouge (un clip de pose) est exporté comme une pose du squelette. Désactivé : ces clips ne sont pas mis dans le fichier.',
             set_annot: 'Exporter les annotations :',
             set_annot_tip: 'Activé : chaque annotation du modèle devient un objet vide à son point, nommé d\'après son titre. Le texte et la vue caméra sont gardés comme propriétés personnalisées. Désactivé : les annotations ne sont pas exportées.',
+            set_split: 'Séparer en parties libres :',
+            set_split_tip: 'Activé : les morceaux de maillage que la visionneuse a découpés sont réunis, et chaque partie connectée devient un objet à part (par exemple chaque dent d\'un modèle dentaire). Les maillages animés ne changent pas. Désactivé : les maillages sont exportés tels que la visionneuse les garde.',
             set_vcolor: 'Couleurs de sommets sRGB>linéaire :',
             set_vcolor_tip: 'Activé : convertit les couleurs de sommets en couleurs linéaires, comme glTF l’exige. Les couleurs ressemblent alors à celles de la visionneuse 3D. Désactivé : écrit les couleurs sans changement.',
             set_flat_mr: 'Métal/rugosité de la visionneuse :',
@@ -1064,6 +1083,8 @@
             set_still_tip: "开：没有任何关节移动的片段（姿态片段）会作为骨骼姿态导出。关：此类片段不会写入文件。",
             set_annot: "导出注释：",
             set_annot_tip: "开：模型的每个注释都会在其位置成为一个以注释标题命名的空对象，文字和相机视角保存为自定义属性。关：不导出注释。",
+            set_split: "拆分为独立部件：",
+            set_split_tip: "开：查看器切开的网格碎片会重新拼合，每个相连的部分成为单独的对象（例如牙齿模型中的每颗牙）。动画网格保持不变。关：按查看器中的原样导出网格。",
             set_vcolor: "顶点颜色 sRGB>线性：",
             set_vcolor_tip: "开：按 glTF 要求将顶点颜色转换为线性颜色。颜色随后会与 3D 查看器中一致。关：颜色保持不变写入。",
             set_flat_mr: "使用 3D 查看器的金属度/粗糙度：",
@@ -3385,6 +3406,274 @@
     }
 
     // skipGlb: the FBX path only needs gltf + bin, so the GLB container is not assembled.
+    // ====================================================================
+    // Split into loose parts (SPLIT_LOOSE_PARTS), a pass over the finished glTF
+    // ====================================================================
+    // The viewer merges the objects that share a material into one geometry and cuts it into pieces
+    // of at most 65535 vertices (a WebGL 1 limit). The cuts go through the objects: the 32 teeth of
+    // "(Dentistry) Human Teeth" come out as 9 meshes, with 25 804 positions on both sides of a cut.
+    // This pass joins the pieces again (same parent, transform, material and attributes), connects
+    // triangles through vertices at exactly the same position, and writes one mesh per connected
+    // part. Only exact positions are joined: objects that touch (teeth in contact) are often less
+    // than 1e-5 apart and must stay separate. A vertex whose attributes are all equal to another
+    // vertex of the same part is merged with it, which closes the seams of the cuts.
+    // Skinned, morphed, animated, instanced and non-triangle meshes are left as they are.
+    const GL_ARRAY = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+    const GL_NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+    const SPLIT_MAX_PARTS = 2000;   // more parts than this is dust or a scan, not separate objects
+
+    function readAccessor(gltf, bin, ai) {
+        const a = gltf.accessors[ai], bv = gltf.bufferViews[a.bufferView];
+        const T = GL_ARRAY[a.componentType], n = GL_NCOMP[a.type];
+        if (bv.byteStride && bv.byteStride !== n * T.BYTES_PER_ELEMENT) throw new Error('interleaved accessor ' + ai);
+        const start = bin.byteOffset + (bv.byteOffset || 0) + (a.byteOffset || 0);
+        return new T(bin.buffer.slice(start, start + a.count * n * T.BYTES_PER_ELEMENT));
+    }
+
+    // Removes meshes, materials, accessors and buffer views that nothing uses any more, and packs the
+    // buffer again. `extra` holds the typed arrays of new buffer views (index = bufferView - firstExtra).
+    function compactGltf(gltf, bin, extra, firstExtra) {
+        const nodes = gltf.nodes;
+        // meshes
+        const meshUsed = new Set();
+        nodes.forEach((n) => { if (n.mesh !== undefined) meshUsed.add(n.mesh); });
+        const meshMap = {}, meshes = [];
+        (gltf.meshes || []).forEach((m, i) => { if (meshUsed.has(i)) { meshMap[i] = meshes.length; meshes.push(m); } });
+        nodes.forEach((n) => { if (n.mesh !== undefined) n.mesh = meshMap[n.mesh]; });
+        gltf.meshes = meshes;
+        // materials
+        if (gltf.materials) {
+            const matUsed = new Set();
+            meshes.forEach((m) => m.primitives.forEach((p) => { if (p.material !== undefined) matUsed.add(p.material); }));
+            const matMap = {}, mats = [];
+            gltf.materials.forEach((m, i) => { if (matUsed.has(i)) { matMap[i] = mats.length; mats.push(m); } });
+            meshes.forEach((m) => m.primitives.forEach((p) => { if (p.material !== undefined) p.material = matMap[p.material]; }));
+            gltf.materials = mats;
+        }
+        // accessors
+        const accUsed = new Set();
+        const markAcc = (i) => { if (i !== undefined) accUsed.add(i); };
+        meshes.forEach((m) => m.primitives.forEach((p) => {
+            Object.keys(p.attributes).forEach((k) => markAcc(p.attributes[k]));
+            markAcc(p.indices);
+            (p.targets || []).forEach((t) => Object.keys(t).forEach((k) => markAcc(t[k])));
+        }));
+        (gltf.skins || []).forEach((sk) => markAcc(sk.inverseBindMatrices));
+        (gltf.animations || []).forEach((an) => an.samplers.forEach((sm) => { markAcc(sm.input); markAcc(sm.output); }));
+        const accMap = {}, accs = [];
+        gltf.accessors.forEach((a, i) => { if (accUsed.has(i)) { accMap[i] = accs.length; accs.push(a); } });
+        const mapAcc = (i) => (i === undefined ? i : accMap[i]);
+        meshes.forEach((m) => m.primitives.forEach((p) => {
+            Object.keys(p.attributes).forEach((k) => { p.attributes[k] = mapAcc(p.attributes[k]); });
+            if (p.indices !== undefined) p.indices = mapAcc(p.indices);
+            (p.targets || []).forEach((t) => Object.keys(t).forEach((k) => { t[k] = mapAcc(t[k]); }));
+        }));
+        (gltf.skins || []).forEach((sk) => { if (sk.inverseBindMatrices !== undefined) sk.inverseBindMatrices = mapAcc(sk.inverseBindMatrices); });
+        (gltf.animations || []).forEach((an) => an.samplers.forEach((sm) => { sm.input = mapAcc(sm.input); sm.output = mapAcc(sm.output); }));
+        gltf.accessors = accs;
+        // buffer views, packed into a new buffer
+        const bvUsed = new Set();
+        accs.forEach((a) => { if (a.bufferView !== undefined) bvUsed.add(a.bufferView); });
+        (gltf.images || []).forEach((im) => { if (im.bufferView !== undefined) bvUsed.add(im.bufferView); });
+        const parts = [], bvMap = {}, bvs = [];
+        let len = 0;
+        gltf.bufferViews.forEach((bv, i) => {
+            if (!bvUsed.has(i)) return;
+            const bytes = i >= firstExtra
+                ? new Uint8Array(extra[i - firstExtra].buffer, extra[i - firstExtra].byteOffset, extra[i - firstExtra].byteLength)
+                : new Uint8Array(bin.buffer, bin.byteOffset + (bv.byteOffset || 0), bv.byteLength);
+            const at = pad4(len);
+            if (at > len) parts.push(new Uint8Array(at - len));
+            parts.push(bytes);
+            bvMap[i] = bvs.length;
+            bvs.push(Object.assign({}, bv, { byteOffset: at, byteLength: bytes.byteLength }));
+            len = at + bytes.byteLength;
+        });
+        accs.forEach((a) => { if (a.bufferView !== undefined) a.bufferView = bvMap[a.bufferView]; });
+        (gltf.images || []).forEach((im) => { if (im.bufferView !== undefined) im.bufferView = bvMap[im.bufferView]; });
+        gltf.bufferViews = bvs;
+        const out = new Uint8Array(len);
+        let pos = 0;
+        parts.forEach((b) => { out.set(b, pos); pos += b.byteLength; });
+        gltf.buffers = [{ byteLength: len }];
+        return out;
+    }
+
+    // Removes the nodes in `drop` (no children, no skin, not animated) and renumbers the references.
+    function dropGltfNodes(gltf, drop) {
+        const map = {}, nodes = [];
+        gltf.nodes.forEach((n, i) => { if (!drop.has(i)) { map[i] = nodes.length; nodes.push(n); } });
+        nodes.forEach((n) => { if (n.children) { n.children = n.children.filter((c) => !drop.has(c)).map((c) => map[c]); if (!n.children.length) delete n.children; } });
+        gltf.scenes.forEach((sc) => { sc.nodes = sc.nodes.filter((c) => !drop.has(c)).map((c) => map[c]); });
+        (gltf.skins || []).forEach((sk) => { sk.joints = sk.joints.map((j) => map[j]); if (sk.skeleton !== undefined) sk.skeleton = map[sk.skeleton]; });
+        (gltf.animations || []).forEach((an) => an.channels.forEach((ch) => { ch.target.node = map[ch.target.node]; }));
+        gltf.nodes = nodes;
+    }
+
+    function splitLooseParts(gltf, bin) {
+        const nodes = gltf.nodes, meshes = gltf.meshes || [];
+        const parentOf = new Array(nodes.length).fill(-1);
+        nodes.forEach((n, i) => (n.children || []).forEach((c) => { parentOf[c] = i; }));
+        const animated = new Set();
+        (gltf.animations || []).forEach((an) => an.channels.forEach((ch) => animated.add(ch.target.node)));
+        const meshUsers = {};
+        nodes.forEach((n, i) => { if (n.mesh !== undefined) (meshUsers[n.mesh] = meshUsers[n.mesh] || []).push(i); });
+        const matKey = (mi) => {
+            const m = gltf.materials && gltf.materials[mi];
+            if (!m) return String(mi);
+            const c = Object.assign({}, m);
+            delete c.name;
+            return JSON.stringify(c);
+        };
+
+        // Groups of mesh pieces that can be joined.
+        const groups = new Map();
+        nodes.forEach((n, ni) => {
+            if (n.mesh === undefined || n.skin !== undefined || (n.children && n.children.length) || animated.has(ni)) return;
+            if (meshUsers[n.mesh].length !== 1) return;
+            const m = meshes[n.mesh];
+            if (!m || m.primitives.length !== 1) return;
+            const p = m.primitives[0];
+            if ((p.mode !== undefined && p.mode !== 4) || p.indices === undefined || p.targets || p.attributes.JOINTS_0 !== undefined) return;
+            const sig = Object.keys(p.attributes).sort().map((k) => {
+                const a = gltf.accessors[p.attributes[k]];
+                return `${k}:${a.componentType}:${a.type}:${a.normalized ? 1 : 0}`;
+            }).join(',');
+            const key = [parentOf[ni], JSON.stringify([n.matrix, n.translation, n.rotation, n.scale]), matKey(p.material), sig].join('|');
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(ni);
+        });
+
+        const extra = [], firstExtra = gltf.bufferViews.length, drop = new Set();
+        const addView = (ta, target) => {
+            extra.push(ta);
+            gltf.bufferViews.push({ buffer: 0, byteOffset: 0, byteLength: ta.byteLength, target });
+            return gltf.bufferViews.length - 1;
+        };
+        let changed = 0;
+
+        groups.forEach((g) => {
+            const p0 = meshes[nodes[g[0]].mesh].primitives[0];
+            const attrs = Object.keys(p0.attributes).sort();
+            // Join the pieces.
+            let V = 0, I = 0;
+            const pieces = g.map((ni) => {
+                const p = meshes[nodes[ni].mesh].primitives[0];
+                const piece = { attr: attrs.map((k) => readAccessor(gltf, bin, p.attributes[k])), idx: readAccessor(gltf, bin, p.indices), base: V };
+                V += gltf.accessors[p.attributes.POSITION].count;
+                I += piece.idx.length;
+                return piece;
+            });
+            const ncomp = attrs.map((k) => GL_NCOMP[gltf.accessors[p0.attributes[k]].type]);
+            const data = attrs.map((k, j) => {
+                const T = GL_ARRAY[gltf.accessors[p0.attributes[k]].componentType], arr = new T(V * ncomp[j]);
+                pieces.forEach((pc) => arr.set(pc.attr[j], pc.base * ncomp[j]));
+                return arr;
+            });
+            const tris = new Uint32Array(I);
+            let ti = 0;
+            pieces.forEach((pc) => { for (let k = 0; k < pc.idx.length; k++) tris[ti++] = pc.idx[k] + pc.base; });
+            const posJ = attrs.indexOf('POSITION'), posBits = new Uint32Array(data[posJ].buffer);
+
+            // Connected parts through exactly equal positions.
+            const posId = new Int32Array(V), posMap = new Map();
+            for (let v = 0; v < V; v++) {
+                const k = posBits[v * 3] + ',' + posBits[v * 3 + 1] + ',' + posBits[v * 3 + 2];
+                let id = posMap.get(k);
+                if (id === undefined) { id = posMap.size; posMap.set(k, id); }
+                posId[v] = id;
+            }
+            const par = new Int32Array(posMap.size);
+            for (let i = 0; i < par.length; i++) par[i] = i;
+            const find = (x) => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+            for (let t = 0; t < I; t += 3) {
+                const a = find(posId[tris[t]]), b = find(posId[tris[t + 1]]), c = find(posId[tris[t + 2]]);
+                if (b !== a) par[b] = a;
+                if (c !== a && c !== b) par[c] = a;
+            }
+            const partOfRoot = new Map(), triPart = new Int32Array(I / 3);
+            for (let t = 0; t < I; t += 3) {
+                const r = find(posId[tris[t]]);
+                let pi = partOfRoot.get(r);
+                if (pi === undefined) { pi = partOfRoot.size; partOfRoot.set(r, pi); }
+                triPart[t / 3] = pi;
+            }
+            const nParts = partOfRoot.size;
+            const label = g.map((ni) => nodes[ni].name).filter(Boolean);
+            const groupName = label.length > 1 ? `${label[0]}..${label[label.length - 1]}` : (label[0] || 'mesh');
+            if (nParts <= 1 && g.length === 1) return;
+            if (nParts > SPLIT_MAX_PARTS) {
+                warn(`split loose parts: ${groupName} has ${nParts} parts (more than ${SPLIT_MAX_PARTS}), left as it is`);
+                return;
+            }
+
+            // Vertices with all attributes equal are one vertex (closes the cut seams).
+            const bitsOf = data.map((d) => (d.BYTES_PER_ELEMENT === 4 ? new Uint32Array(d.buffer) : d));
+            const fullId = new Int32Array(V), fullMap = new Map();
+            for (let v = 0; v < V; v++) {
+                let k = '';
+                for (let j = 0; j < attrs.length; j++) {
+                    const b = bitsOf[j], n = ncomp[j];
+                    for (let c = 0; c < n; c++) k += b[v * n + c] + ',';
+                }
+                let id = fullMap.get(k);
+                if (id === undefined) { id = fullMap.size; fullMap.set(k, id); }
+                fullId[v] = id;
+            }
+            const newIdx = new Int32Array(fullMap.size).fill(-1);
+            const partVerts = [], partIdx = [];
+            for (let q = 0; q < nParts; q++) { partVerts.push([]); partIdx.push([]); }
+            for (let t = 0; t < I; t++) {
+                const v = tris[t], q = triPart[(t / 3) | 0], f = fullId[v];
+                if (newIdx[f] < 0) { newIdx[f] = partVerts[q].length; partVerts[q].push(v); }
+                partIdx[q].push(newIdx[f]);
+            }
+
+            // One mesh per part, under the first node of the group.
+            const head = nodes[g[0]], pad = String(nParts).length, newMeshes = [];
+            for (let q = 0; q < nParts; q++) {
+                const pv = partVerts[q], prim = { attributes: {}, mode: 4 };
+                if (p0.material !== undefined) prim.material = p0.material;
+                attrs.forEach((k, j) => {
+                    const src = gltf.accessors[p0.attributes[k]], n = ncomp[j], T = GL_ARRAY[src.componentType];
+                    const arr = new T(pv.length * n);
+                    for (let i = 0; i < pv.length; i++) for (let c = 0; c < n; c++) arr[i * n + c] = data[j][pv[i] * n + c];
+                    const acc = { bufferView: addView(arr, 34962), componentType: src.componentType, count: pv.length, type: src.type };
+                    if (src.normalized) acc.normalized = true;
+                    if (k === 'POSITION') {
+                        const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+                        for (let i = 0; i < arr.length; i += 3) for (let c = 0; c < 3; c++) { if (arr[i + c] < mn[c]) mn[c] = arr[i + c]; if (arr[i + c] > mx[c]) mx[c] = arr[i + c]; }
+                        acc.min = mn; acc.max = mx;
+                    }
+                    gltf.accessors.push(acc);
+                    prim.attributes[k] = gltf.accessors.length - 1;
+                });
+                const ix = pv.length < 65535 ? new Uint16Array(partIdx[q]) : new Uint32Array(partIdx[q]);
+                gltf.accessors.push({ bufferView: addView(ix, 34963), componentType: ix instanceof Uint32Array ? 5125 : 5123, count: ix.length, type: 'SCALAR' });
+                prim.indices = gltf.accessors.length - 1;
+                const name = nParts > 1 ? `${head.name || 'mesh'}_part_${String(q + 1).padStart(pad, '0')}` : (head.name || 'mesh');
+                meshes.push({ name, primitives: [prim] });
+                newMeshes.push(meshes.length - 1);
+            }
+            if (nParts === 1) {
+                head.mesh = newMeshes[0];
+            } else {
+                delete head.mesh;
+                head.children = newMeshes.map((mi) => {
+                    nodes.push({ name: meshes[mi].name, mesh: mi });
+                    return nodes.length - 1;
+                });
+            }
+            for (let k = 1; k < g.length; k++) drop.add(g[k]);
+            changed++;
+            log(`split loose parts: ${groupName} (${g.length} mesh piece${g.length > 1 ? 's' : ''}, ${V} vertices) -> ${nParts} part${nParts > 1 ? 's' : ''}`);
+        });
+
+        if (!changed) { log('split loose parts: nothing to split'); return bin; }
+        if (drop.size) dropGltfNodes(gltf, drop);
+        return compactGltf(gltf, bin, extra, firstExtra);
+    }
+
     function _downloadGLBSync(skipGlb) {
         try {
             const allNodes = window.allmodel;
@@ -4273,6 +4562,7 @@
                 binPos += binChunks[bc].length;
             }
             binChunks.length = 0;   // the joined copy is the only one kept
+            if (CONFIG.SPLIT_LOOSE_PARTS) binAll = splitLooseParts(gltf, binAll);
             const modelName = modelBaseName().replace(/[\\\/:*?"<>|]/g, '_') || 'model';
             if (skipGlb) return { glb: null, gltf, bin: binAll, zipTex, modelName };
 
@@ -4805,6 +5095,7 @@
         checkSetting(configDiv, 'REDUCE_KEYS', 'set_reduce', 'reduce keyframes');
         checkSetting(configDiv, 'KEEP_STILL_CLIPS', 'set_still', 'keep still clips');
         checkSetting(configDiv, 'EXPORT_ANNOTATIONS', 'set_annot', 'export annotations');
+        checkSetting(configDiv, 'SPLIT_LOOSE_PARTS', 'set_split', 'split into loose parts');
         checkSetting(configDiv, 'VERTEX_COLOR_SRGB', 'set_vcolor', 'vertex color sRGB->linear');
         checkSetting(configDiv, 'FLAT_MR_FROM_VIEWER', 'set_flat_mr', 'flat metal/rough from viewer');
 
