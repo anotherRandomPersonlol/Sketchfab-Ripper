@@ -67,19 +67,20 @@ await (async () => {
     let top = all.find((o) => !isHot(o)) || all[0], g = 0;
     while (top && top._parents && top._parents[0] && g++ < 64) top = top._parents[0];
     const nodes = [], seenN = new Set();
+    const kids = (n) => n.children || n._children || [];
     (function walk(n, depth) {
         if (!n || seenN.has(n) || depth > 40 || nodes.length > 60) return;
         seenN.add(n);
         const nm = n._name || '';
-        if (/hotspot|annotation|feature/i.test(nm)) {
+        if (/hotspot|annotation/i.test(nm)) {
             nodes.push({
-                name: nm, depth, children: (n._children || []).length,
-                childNames: (n._children || []).slice(0, 8).map((c) => c._name || '(no name)'),
+                name: nm, depth, children: kids(n).length,
+                childNames: kids(n).slice(0, 8).map((c) => c._name || '(no name)'),
                 matrix: matOf(n) && r3(matOf(n)), worldOrigin: r3(xf(world(n), [0, 0, 0])),
                 keys: Object.keys(n).filter((k) => !/^_?(children|parents|matrix)$/.test(k)).slice(0, 25),
             });
         }
-        (n._children || []).forEach((c) => walk(c, depth + 1));
+        kids(n).forEach((c) => walk(c, depth + 1));
     })(top, 0);
 
     // 3) Model bounds in world space (to compare with the marker positions).
@@ -108,7 +109,32 @@ await (async () => {
         .map((e) => (e.className && e.className.baseVal !== undefined ? e.className.baseVal : e.className) + ' :: ' + (e.textContent || '').trim().slice(0, 60))
         .filter((s, i, a) => a.indexOf(s) === i).slice(0, 25);
 
+    // 6) Annotation data embedded in the page (prefetched JSON in <script> tags): objects with a
+    //    position/eye/target or a name + content, anywhere in the parsed JSON.
+    const found = [];
+    const scan = (v, path, d) => {
+        if (!v || typeof v !== 'object' || d > 14 || found.length > 12) return;
+        const k = Array.isArray(v) ? [] : Object.keys(v);
+        if (k.includes('position') && (k.includes('eye') || k.includes('target') || k.includes('content') || k.includes('name'))) {
+            found.push({ path, keys: k.slice(0, 20), sample: JSON.stringify(v).slice(0, 500) });
+            return;
+        }
+        (Array.isArray(v) ? v : k.map((x) => v[x])).forEach((c, i) => scan(c, path + '/' + (Array.isArray(v) ? i : k[i]), d + 1));
+    };
+    const scripts = [...document.querySelectorAll('script:not([src])')].map((e) => ({ id: e.id || e.type || '', t: e.textContent || '' }))
+        .filter((e) => /annotation|hotspot/i.test(e.t));
+    scripts.forEach((e) => {
+        let j = null;
+        try { j = JSON.parse(e.t); } catch (x) { /* not JSON */ }
+        if (j) scan(j, '#' + e.id, 0);
+    });
+    const scriptHits = scripts.slice(0, 6).map((e) => {
+        const i = e.t.search(/annotation|hotspot/i);
+        return { id: e.id, length: e.t.length, around: e.t.slice(Math.max(0, i - 150), i + 350) };
+    });
+
     return JSON.stringify({
+        embedded: found, scriptHits,
         meshesSeen: all.length, markerMeshes: hot.length, markers, nodes,
         modelBounds: { min: r3(lo), max: r3(hi) }, urls, bodies, dom,
         location: location.href.slice(0, 120),
