@@ -12,7 +12,15 @@
     var lines = window.__matModelProbe = [];
     function L(s) { lines.push(s); console.log(TAG, s); }
 
-    var am = window.allmodel || [];
+    // Optional: set window.__matProbeMatch = 'part of a mesh or material name' before pasting, to
+    // show only the materials of those meshes (up to 4).
+    var MATCH = String(window.__matProbeMatch || '').toLowerCase();
+    var am = (window.allmodel || []).filter(function (o) {
+        if (!MATCH) return true;
+        var n = String(o._name || ''), c = o._parents && o._parents[0], g = 0;
+        while (c && g++ < 12) { n += ' ' + (c._name || ''); c = c._parents && c._parents[0]; }
+        return n.toLowerCase().indexOf(MATCH) !== -1;
+    });
     L('allmodel length = ' + am.length);
     if (!am.length) { L('empty: wrong frame or model not loaded'); return lines.join('\n'); }
 
@@ -106,5 +114,38 @@
         if (atlas) L('  colorAtlas keys: ' + Object.keys(atlas).slice(0, 25).join(','));
     });
     if (!shown) L('no material model found on any mesh or its ancestors');
+
+    // Compact list of every material (not limited to 4): the transparency-related settings and the
+    // blend state of the statesets above the first mesh. One line per material.
+    L('=== transparency summary (all materials) ===');
+    var seen2 = [];
+    (window.allmodel || []).forEach(function (o) {
+        var cur = o, d = 0, ss = null, mat = null, blends = [];
+        while (cur && d++ <= 14) {
+            var s2 = cur.stateset || cur._stateSet;
+            if (s2 && s2._attributeArray) s2._attributeArray.forEach(function (w) {
+                var a = unwrap(w);
+                if (!a) return;
+                var tn = a.typeMember || a._type || (a.constructor && a.constructor.name) || '';
+                if (/blend/i.test(tn) || a._sourceFactor !== undefined || a._sourceFactorRGB !== undefined) {
+                    blends.push(tn + '(' + [a._sourceFactor, a._destinationFactor, a._sourceFactorRGB, a._destinationFactorRGB, a._sourceFactorAlpha, a._destinationFactorAlpha].filter(function (x) { return x !== undefined; }).join(',') + ')');
+                }
+            });
+            if (!mat && s2) {
+                var a0 = unwrap(s2._attributeArray && s2._attributeArray[0]);
+                if (a0 && a0._materialModel) { ss = s2; mat = a0; }
+            }
+            cur = cur._parents && cur._parents[0];
+        }
+        if (!mat || seen2.indexOf(ss) !== -1) return;
+        seen2.push(ss);
+        var at = mat._materialModel.attributes || {}, ch = at.channels || {}, map = mat._channelMapping || {};
+        var g = function (n) { var c = ch[n] && ch[n].attributes; return c || {}; };
+        var op = g('Opacity'), am2 = g('AlphaMask'), al = g('AlbedoPBR'), em = g('EmitColor');
+        L((at.name || o._name) + ': Opacity{enable:' + op.enable + ',factor:' + op.factor + ',type:' + op.type + ',invert:' + op.invert + ',tex:' + (map.Opacity >= 0) + '}' +
+          ' AlphaMask{enable:' + am2.enable + ',factor:' + am2.factor + ',tex:' + (map.AlphaMask >= 0) + '}' +
+          ' Albedo{tex:' + (map.AlbedoPBR >= 0) + '} Emit{enable:' + em.enable + ',factor:' + em.factor + ',type:' + em.type + ',tex:' + (map.EmitColor >= 0) + '}' +
+          ' shadeless:' + at.shadeless + ' vertexAlpha:' + at.vertexAlphaEnable + ' blend:[' + blends.join(' ') + ']');
+    });
     return lines.join('\n');   // the console shows this text: copy it and send it
 })();
