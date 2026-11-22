@@ -3810,11 +3810,13 @@
     // Centre at origin (CENTRE_AT_ORIGIN)
     // ====================================================================
     // The export keeps the model where it is in the viewer's scene, and many models sit far from
-    // the origin (the viewer frames the camera on them). This moves the whole scene (a translation
-    // added to scene_root, after the Y-up turn and the export scale) so the centre of the bounding
-    // box is at X = Z = 0 and the lowest point at Y = 0. The bounds use the rest pose: skinned and
-    // animated meshes are placed by their bind pose.
-    function centreSceneRoot(nodes, meshes, accs, rootIdx) {
+    // the origin (the viewer frames the camera on them). This moves the whole scene so the centre of
+    // the bounding box is at X = Z = 0 and the lowest point at Y = 0. scene_root stays at the origin
+    // (its pivot is the floor centre in Blender etc.): the offset goes into its children, converted
+    // to scene_root's local space (before the Y-up turn and the export scale). If a child has an
+    // animated translation, the offset goes into a new 'centre_offset' node above the children.
+    // The bounds use the rest pose: skinned and animated meshes are placed by their bind pose.
+    function centreSceneRoot(nodes, meshes, accs, rootIdx, animations) {
         const localMat = (n) => n.matrix || composeTRS({
             translation: n.translation || [0, 0, 0], rotation: n.rotation || [0, 0, 0, 1], scale: n.scale || [1, 1, 1] });
         const xf = (m, p) => [0, 1, 2].map((r) => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]);
@@ -3838,8 +3840,27 @@
         visit(rootIdx, identityMat4(), 0);
         if (!isFinite(lo[0])) { warn('centre at origin: no mesh bounds, model not moved'); return; }
         const d = [-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2];
-        const m = nodes[rootIdx].matrix || (nodes[rootIdx].matrix = identityMat4());
-        m[12] += d[0]; m[13] += d[1]; m[14] += d[2];
+        // World offset -> scene_root local offset (inverse of its rotation and scale only).
+        const rm = localMat(nodes[rootIdx]).slice(); rm[12] = rm[13] = rm[14] = 0;
+        const ri = invertMat4(rm);
+        const o = [0, 1, 2].map((r) => ri[r] * d[0] + ri[4 + r] * d[1] + ri[8 + r] * d[2]);
+        const kids = (nodes[rootIdx].children || []).slice();
+        const animT = new Set();
+        (animations || []).forEach((an) => an.channels.forEach((ch) => {
+            if (ch.target.path === 'translation' || ch.target.path === 'matrix') animT.add(ch.target.node);
+        }));
+        let targets = kids;
+        if (kids.some((k) => animT.has(k))) {
+            const wi = nodes.length;
+            nodes.push({ name: 'centre_offset', children: kids });
+            nodes[rootIdx].children = [wi];
+            targets = [wi];
+        }
+        targets.forEach((k) => {
+            const n = nodes[k];
+            if (n.matrix) { n.matrix[12] += o[0]; n.matrix[13] += o[1]; n.matrix[14] += o[2]; }
+            else n.translation = [0, 1, 2].map((i) => (n.translation ? n.translation[i] : 0) + o[i]);
+        });
         log(`centre at origin: moved by ${d.map((v) => v.toFixed(4)).join(', ')} (size ${(hi[0] - lo[0]).toFixed(4)} x ${(hi[1] - lo[1]).toFixed(4)} x ${(hi[2] - lo[2]).toFixed(4)})`);
     }
 
@@ -4690,7 +4711,7 @@
                 if (same) delete n.matrix;   // validator NODE_MATRIX_DEFAULT
             });
 
-            if (CONFIG.CENTRE_AT_ORIGIN) centreSceneRoot(nodes, meshes, accs, sceneRootIdx);
+            if (CONFIG.CENTRE_AT_ORIGIN) centreSceneRoot(nodes, meshes, accs, sceneRootIdx, animations);
 
             const rootNodes = [sceneRootIdx];
             nodes.forEach((n) => {

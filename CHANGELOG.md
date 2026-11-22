@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- **Centre at origin** setting (off by default). Moves the whole model so its centre is at the origin and its lowest point at height 0. Many models sit far from the origin in Sketchfab's scene; for example the teeth model from issue #3 came out about 6.6 cm above the origin. Works for GLB and FBX, and annotations move with the model.
+- **Centre at origin** setting (off by default). Moves the whole model so its centre is at the origin and its lowest point at height 0. Many models sit far from the origin in Sketchfab's scene; for example the teeth model from issue #3 came out about 6.6 cm above the origin. The scene_root node stays at the origin, so its pivot is the floor centre. Works for GLB and FBX, and annotations move with the model.
 
 ## v1.7.3
 
