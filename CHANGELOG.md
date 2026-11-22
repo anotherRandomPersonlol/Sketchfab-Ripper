@@ -7,6 +7,7 @@
 
 ### Fixed
 - Textures that the viewer shows without a protection key were never captured, so they were missing from the export (issue #5: the arches and balcony people of the Oscars theater). The script captures textures when the viewer rebuilds an image, and the viewer only does that for images with a key. Images without a key are now downloaded directly, at the largest size without a key (often the original file). Images with a key stay on the old path.
+- A material with additive opacity (the viewer adds its colour, so black is invisible) exported as a solid card with a black background (issue #5: the Oscar statue cards). glTF has no additive blending, so the brightness of the colour image now becomes its alpha, and the material blends.
 
 ## v1.7.2
 

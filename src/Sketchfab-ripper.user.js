@@ -2574,10 +2574,12 @@
         return real(cm.Opacity) ? cm.Opacity : (real(cm.AlphaMask) ? cm.AlphaMask : (cm.Opacity || cm.AlphaMask || null));
     }
 
-    function _mergeOneOpacity(cm) {
+    // additive: the Opacity channel blends additively (black adds nothing, so it is invisible). glTF has
+    // no additive blending: the brightness of the colour image becomes its alpha (factor = opacity value).
+    function _mergeOneOpacity(cm, additive) {
         const noColor = !cm.AlbedoPBR || !(cm.AlbedoPBR.url || cm.AlbedoPBR.name) || cm.AlbedoPBR.atlas;
         const colorBlob = noColor ? null : _blobForUrl(cm.AlbedoPBR.url);
-        const maskBlob = _blobForUrl(opacitySource(cm).url);
+        const maskBlob = additive ? colorBlob : _blobForUrl(opacitySource(cm).url);
         if ((!noColor && !colorBlob) || !maskBlob) {
             warn(`opacity merge: missing source (color=${!!colorBlob} mask=${!!maskBlob})`);
             return Promise.resolve(null);
@@ -2593,8 +2595,13 @@
                 out[q] = cData ? cData[q] : 255;          // no colour image: white, the factor gives the colour
                 out[q + 1] = cData ? cData[q + 1] : 255;
                 out[q + 2] = cData ? cData[q + 2] : 255;
-                // luminance of the mask: black = clear, white = solid
-                out[q + 3] = Math.round(0.2126 * mData[q] + 0.7152 * mData[q + 1] + 0.0722 * mData[q + 2]);
+                if (additive) {
+                    // brightest channel: saturated colours (gold) stay visible, black is clear
+                    out[q + 3] = Math.round(Math.max(mData[q], mData[q + 1], mData[q + 2]) * additive.factor);
+                } else {
+                    // luminance of the mask: black = clear, white = solid
+                    out[q + 3] = Math.round(0.2126 * mData[q] + 0.7152 * mData[q + 1] + 0.0722 * mData[q + 2]);
+                }
             }
             const oc = document.createElement('canvas');
             oc.width = W; oc.height = H;
@@ -2625,8 +2632,35 @@
             const mName = meshName(obj, i);
             const cm = getChannelTextureMap(obj);
             const opSrc = opacitySource(cm);
-            if (!opSrc || !(opSrc.url || opSrc.name) || opSrc.atlas) return;
             const mch = getMaterialChannels(obj);
+            // Additive opacity without an opacity image (issue #5: the Oscar cards, a black background
+            // that the viewer adds away): alpha from the brightness of the colour image.
+            const addOp = mch && mch.Opacity;
+            if (addOp && addOp.enable && /additive/i.test(String(addOp.type || '')) &&
+                !(opSrc && (opSrc.url || opSrc.name) && !opSrc.atlas) &&
+                cm.AlbedoPBR && cm.AlbedoPBR.url && !cm.AlbedoPBR.atlas) {
+                const san = sanitizeTextureName(mName);
+                if (seen[san]) return;
+                seen[san] = true;
+                _opacityKind[san] = 'opacity';
+                const factor = typeof addOp.factor === 'number' ? Math.max(0, Math.min(1, addOp.factor)) : 1;
+                const okey = `${normalizeUrl(cm.AlbedoPBR.url)}|additive|${factor}`;
+                if (_alphaFirst[okey]) { _alphaShare[san] = _alphaFirst[okey]; log(`opacity merge: ${mName} shares the merged texture of ${_alphaFirst[okey]}`); return; }
+                _alphaFirst[okey] = san;
+                jobs.push(
+                    _mergeOneOpacity(cm, { factor }).then((result) => {
+                        if (!result || !result.blob) return;
+                        const fname = `${san}_Alpha${result.ext}`;
+                        objects[fname] = result.blob;
+                        saveimagecache2[`__merged_op__:${san}`] = { name: `${san}_Alpha`, fileExt: result.ext, dataURL: 'merged' };
+                        log('merged opacity:', mName, '→', fname, `${result.blob.size}B (additive: alpha from the colour brightness)`);
+                    }).catch((e) => {
+                        warn('opacity merge failed for', mName, e.message);
+                    }).then(tick)
+                );
+                return;
+            }
+            if (!opSrc || !(opSrc.url || opSrc.name) || opSrc.atlas) return;
             const isOpacity = opSrc === cm.Opacity;
             const opCh = mch && (isOpacity ? mch.Opacity : mch.AlphaMask);
             if (opCh && opCh.enable === false) return;   // texture present but the channel is switched off in the viewer
@@ -3440,6 +3474,14 @@
             }
             // Opacity given as a plain value (no mask image): use it as base colour alpha.
             const opf = flat.Opacity;
+            if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && /additive/i.test(String(opf.type || '')) && !pbr.baseColorTexture) {
+                // Additive with a flat colour: the colour's brightness is how much it shows.
+                if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
+                const f = typeof opf.factor === 'number' ? opf.factor : 1;
+                pbr.baseColorFactor[3] = Math.max(0, Math.min(1, f * Math.max(pbr.baseColorFactor[0], pbr.baseColorFactor[1], pbr.baseColorFactor[2])));
+                m.alphaMode = 'BLEND';
+                did.push(`opacity ${pbr.baseColorFactor[3].toFixed(2)} (additive, from the colour brightness)`);
+            }
             if (opf && opf.enable && !m.alphaMode && !texd('Opacity') && typeof opf.factor === 'number' && opf.factor < 0.999) {
                 if (!pbr.baseColorFactor) pbr.baseColorFactor = [1, 1, 1, 1];
                 pbr.baseColorFactor[3] = Math.max(0, Math.min(1, opf.factor));
