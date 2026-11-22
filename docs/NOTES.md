@@ -552,3 +552,9 @@ Found on a helicopter model (DC News helicopter) that is no longer on Sketchfab,
 - `splitLooseParts` runs on the finished glTF (GLB and FBX both use it): groups by parent node, transform, material content (name ignored, each piece has its own material copy) and attribute layout; skips skinned, morphed, animated, instanced and non-triangle meshes, and groups with more than 2000 parts (dust, scans). Vertices with all attributes equal are merged, which closes the cut seams (566,390 -> 533,833 vertices on the teeth). `compactGltf` drops the old accessors, buffer views, meshes and materials. Teeth: 1,067,534 triangles kept, glTF validator 0 errors, 0 warnings, 2.4 s in Node.
 - The strip slivers are not from these cuts: the pieces are triangle lists. The slivers come from bridge triangles in triangle strips.
 
+## Round 30: textures without a protection key (issue #5)
+
+- Oscars Academy Dolby Theater: 3 of 13 textures were never captured (TextureArch.png, TextureArch NRM.png, BalconPeople.png). probe-texture-catalog.js: these 3 are the only textures whose images have no `pk`; the 10 captured ones all load a keyed image.
+- The readback (drawhookimg) sits in the viewer's renderInto pass, which rebuilds keyed images on the GPU. An image without a key is uploaded as it is, so renderInto (and the capture) never runs.
+- Fix: drawhookcanvas keeps the texture's image list and the viewer's chosen image. When the chosen image has no key (and the lists carry the `pk` field at all), `fetchPlainTexture` downloads the largest unkeyed image (original file first at equal size) and registers it like a readback. The export also starts any missing downloads before the texture wait. Keyed images are never downloaded: they stay on the readback path.
+

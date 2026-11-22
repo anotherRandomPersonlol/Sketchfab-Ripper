@@ -5,6 +5,9 @@
 ### Added
 - **Split into loose parts** setting (off by default). The viewer merges objects that share a material and cuts the result into pieces of at most 65,535 vertices, through the objects. With the setting on, the export joins the pieces again and writes one mesh per connected part, for example the 32 teeth of a dental model instead of 9 cut pieces. Vertices are joined only at exactly the same position, so objects that touch stay separate. Works for GLB and FBX.
 
+### Fixed
+- Textures that the viewer shows without a protection key were never captured, so they were missing from the export (issue #5: the arches and balcony people of the Oscars theater). The script captures textures when the viewer rebuilds an image, and the viewer only does that for images with a key. Images without a key are now downloaded directly, at the largest size without a key (often the original file). Images with a key stay on the old path.
+
 ## v1.7.2
 
 ### Added

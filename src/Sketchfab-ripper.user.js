@@ -1748,6 +1748,68 @@
         return String(u).split('?')[0].split('#')[0].replace(/\/+$/, '');
     }
 
+    // ====================================================================
+    // Plain textures: images the viewer shows as they are stored
+    // ====================================================================
+    // The texture readback (drawhookimg) runs in the viewer's renderInto pass. The viewer uses that
+    // pass for images with a protection key ("pk" in the image list): it rebuilds them on the GPU.
+    // An image without a key is uploaded as it is, so renderInto never runs and the texture is
+    // never captured (issue #5: 3 of 13 textures on the Oscars theater, all of them without a key).
+    // Such an image is a plain file: the script downloads it directly, at the largest size that has
+    // no key either. Images with a key stay on the readback path.
+    let _pkFieldSeen = false;   // the image lists carry "pk": a missing key then means "no key"
+
+    function imageHasKey(im, ent) {
+        const k = im && Object.prototype.hasOwnProperty.call(im, 'pk') ? im.pk : ent.texPk;
+        return !(k === undefined || k === null || k === '');
+    }
+    // True when the image the viewer uses has no key, and the data says so (pk field present).
+    function isPlainImage(ent, chosen) {
+        if (!chosen || !chosen.url) return false;
+        const known = _pkFieldSeen || Object.prototype.hasOwnProperty.call(chosen, 'pk');
+        return known && !imageHasKey(chosen, ent);
+    }
+    // The largest image of the texture without a key (the original file first at equal size).
+    function largestPlainImage(ent) {
+        let best = ent.chosen;
+        (ent.images || []).forEach((im) => {
+            if (!im || !im.url || imageHasKey(im, ent)) return;
+            const a = (im.width || 0) * (im.height || 0), b = (best.width || 0) * (best.height || 0);
+            const orig = !(im.options && Object.keys(im.options).length), bestOrig = !(best.options && Object.keys(best.options).length);
+            if (a > b || (a === b && orig && !bestOrig)) best = im;
+        });
+        return best;
+    }
+    function fetchPlainTexture(key, ent) {
+        const im = largestPlainImage(ent);
+        return fetch(im.url, { credentials: 'omit' })
+            .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+            .then((blob) => {
+                if (ent.dataURL) return;   // the readback was first
+                const m = String(im.url).split('?')[0].match(/\.(png|jpe?g|webp)$/i);
+                const ext = m ? '.' + m[1].toLowerCase().replace('jpeg', 'jpg') : (/jpe?g/.test(blob.type) ? '.jpg' : '.png');
+                objects[ent.name + ext] = blob;
+                ent.fileExt = ext;
+                ent.dataURL = true;
+                ent.direct = true;
+                log(`texture ${ent.name}${ext}: downloaded directly (${im.width}x${im.height}, no key, the viewer does not read it back)`);
+            })
+            .catch((e) => { warn(`texture ${ent.name}: direct download failed (${e.message})`); })
+            .then(() => { ent.fetching = null; });
+    }
+    // At export: start the downloads that are not running yet, and wait for all of them.
+    function fetchPlainTextures() {
+        const jobs = [];
+        for (const key in saveimagecache2) {
+            if (!saveimagecache2.hasOwnProperty(key)) continue;
+            const ent = saveimagecache2[key];
+            if (!ent || ent.dataURL) continue;
+            if (!ent.fetching && isPlainImage(ent, ent.chosen)) ent.fetching = fetchPlainTexture(key, ent);
+            if (ent.fetching) jobs.push(ent.fetching);
+        }
+        return Promise.all(jobs);
+    }
+
     window.drawhookcanvas = (e, imagemodel) => {
         try {
             if (!e) return e;
@@ -1775,6 +1837,13 @@
                     _usedTextureNames[texName] = true;
                     saveimagecache2[url_image] = { name: texName };
                 }
+                // Kept for fetchPlainTextures: the image list and the image the viewer uses.
+                const ent = saveimagecache2[url_image];
+                ent.images = imagemodel.attributes.images;
+                ent.chosen = obr;
+                ent.texPk = imagemodel.attributes.pk;
+                if (imagemodel.attributes.images.some((im) => im && Object.prototype.hasOwnProperty.call(im, 'pk'))) _pkFieldSeen = true;
+                if (!ent.fetching && !ent.dataURL && isPlainImage(ent, obr)) ent.fetching = fetchPlainTexture(url_image, ent);
                 return obr;
             }
         } catch (e2) { warn('drawhookcanvas', e2.message); }
@@ -4656,11 +4725,11 @@
             : ['stage_textures', 'stage_merge', 'stage_build', 'stage_zip'];
         const stage = (k) => progStage(k + 1, stages.length, i18n(stages[k]));
         stage(0);
-        waitForTextures((got, total, left) => {
+        fetchPlainTextures().then(() => waitForTextures((got, total, left) => {
             if (!total) progSub(1, i18n('pr_no_textures'));
             else if (got >= total) progSub(1, i18n('pr_all_captured', { n: total }));
             else progSub(got / total, i18n('pr_captured_wait', { got, total, s: Math.ceil(left) }));
-        })
+        }))
             .then(() => fetchAnnotations())
             .then(() => {
                 stage(1);
