@@ -91,6 +91,7 @@ Click the gear icon in the panel. The script keeps your settings for the next vi
 | Reduce keyframes | On | Leaves out animation keys that the keys before and after them already give. The file gets about half as large. Turn it off if an animation looks wrong. |
 | Keep still clips | Off | A clip in which no joint moves (a pose clip) becomes a pose of the skeleton, with two equal keys. Off: such clips are left out of the file. |
 | Export annotations | Off | Each annotation of the model becomes an empty object at its point, named after its title ("1. Title", in an `annotations` group). Its text and camera view (`eye`, `target`) are kept in the node's extras (custom properties in Blender). |
+| Split into loose parts | Off | The viewer merges objects that share a material and cuts them into pieces of at most 65,535 vertices, so one object can be spread over two meshes. On: the pieces are joined again, and every connected part becomes its own object (for example each tooth of a dental model). Animated meshes and meshes with shape keys are left as they are. Original object names are not in the viewer, so the parts are named `mesh_0_part_01`, `mesh_0_part_02`, and so on. |
 | Vertex color sRGB>linear | On | Converts vertex colors to the color space that glTF uses. |
 | Flat metal/rough from viewer | On | Uses the metalness and roughness values of the viewer for materials without textures. |
 | Export scale | 1 | Multiplies the size of the model. Use 0.01 for a model in centimeters. |
