@@ -3811,43 +3811,99 @@
     // ====================================================================
     // The export keeps the model where it is in the viewer's scene, and many models sit far from
     // the origin (the viewer frames the camera on them). This moves the whole scene so the centre of
-    // the bounding box is at X = Z = 0 and the lowest point at Y = 0. scene_root stays at the origin
-    // (its pivot is the floor centre in Blender etc.): the offset goes into its children, converted
-    // to scene_root's local space (before the Y-up turn and the export scale). If a child has an
-    // animated translation, the offset goes into a new 'centre_offset' node above the children.
+    // the bounding box is at X = Z = 0 and the lowest point at Y = 0 (after the Y-up turn and the
+    // export scale). Runs on the finished glTF, after the split pass.
+    //   Baked (static models: no skins, no animations, no mesh used by 2 nodes): the offset goes
+    //   into the vertex positions, so every node keeps its transform and the object pivots (in
+    //   Blender etc.) stay at the floor centre, under the model. Empty leaf nodes (annotations)
+    //   get the offset in their translation.
+    //   Otherwise: the offset goes into scene_root's children (or a 'centre_offset' node above them
+    //   if a child has an animated translation). Pivots then move with the model.
     // The bounds use the rest pose: skinned and animated meshes are placed by their bind pose.
-    function centreSceneRoot(nodes, meshes, accs, rootIdx, animations) {
+    function centreScene(gltf, bin) {
+        const nodes = gltf.nodes, meshes = gltf.meshes || [], accs = gltf.accessors;
+        const rootIdx = gltf.scenes[gltf.scene || 0].nodes[0];
         const localMat = (n) => n.matrix || composeTRS({
             translation: n.translation || [0, 0, 0], rotation: n.rotation || [0, 0, 0, 1], scale: n.scale || [1, 1, 1] });
         const xf = (m, p) => [0, 1, 2].map((r) => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]);
+        const linInv = (m) => { const r = m.slice(); r[12] = r[13] = r[14] = 0; return invertMat4(r); };
+        const dir = (m, v) => [0, 1, 2].map((r) => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2]);
+        const W = {}, P = {};   // node -> world matrix, node -> parent world matrix
         const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        const meshUse = {};
         const visit = (ni, parentW, depth) => {
             const n = nodes[ni];
-            if (!n || depth > 256) return;
-            const W = mulMat4(parentW, localMat(n));
+            if (!n || depth > 256 || W[ni]) return;
+            P[ni] = parentW; W[ni] = mulMat4(parentW, localMat(n));
             if (n.mesh !== undefined && meshes[n.mesh]) {
+                meshUse[n.mesh] = (meshUse[n.mesh] || 0) + 1;
                 meshes[n.mesh].primitives.forEach((pr) => {
                     const a = accs[pr.attributes && pr.attributes.POSITION];
                     if (!a || !a.min || !a.max) return;
                     for (let c = 0; c < 8; c++) {
-                        const p = xf(W, [c & 1 ? a.max[0] : a.min[0], c & 2 ? a.max[1] : a.min[1], c & 4 ? a.max[2] : a.min[2]]);
+                        const p = xf(W[ni], [c & 1 ? a.max[0] : a.min[0], c & 2 ? a.max[1] : a.min[1], c & 4 ? a.max[2] : a.min[2]]);
                         for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
                     }
                 });
             }
-            (n.children || []).forEach((c) => visit(c, W, depth + 1));
+            (n.children || []).forEach((c) => visit(c, W[ni], depth + 1));
         };
         visit(rootIdx, identityMat4(), 0);
         if (!isFinite(lo[0])) { warn('centre at origin: no mesh bounds, model not moved'); return; }
         const d = [-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2];
-        // World offset -> scene_root local offset (inverse of its rotation and scale only).
-        const rm = localMat(nodes[rootIdx]).slice(); rm[12] = rm[13] = rm[14] = 0;
-        const ri = invertMat4(rm);
-        const o = [0, 1, 2].map((r) => ri[r] * d[0] + ri[4 + r] * d[1] + ri[8 + r] * d[2]);
+        const size = `size ${(hi[0] - lo[0]).toFixed(4)} x ${(hi[1] - lo[1]).toFixed(4)} x ${(hi[2] - lo[2]).toFixed(4)}`;
+        const moveNode = (n, off) => {
+            if (n.matrix) { n.matrix[12] += off[0]; n.matrix[13] += off[1]; n.matrix[14] += off[2]; }
+            else n.translation = [0, 1, 2].map((i) => (n.translation ? n.translation[i] : 0) + off[i]);
+        };
+
+        // Baked: one local offset per POSITION accessor (float only, one user).
+        let bake = !(gltf.skins && gltf.skins.length) && !(gltf.animations && gltf.animations.length)
+            && Object.keys(meshUse).every((m) => meshUse[m] === 1);
+        const accOff = new Map();
+        if (bake) {
+            Object.keys(W).forEach((ni) => {
+                const n = nodes[ni];
+                if (n.mesh === undefined || !meshes[n.mesh]) return;
+                const l = dir(linInv(W[ni]), d);
+                meshes[n.mesh].primitives.forEach((pr) => {
+                    const ai = pr.attributes && pr.attributes.POSITION, a = accs[ai];
+                    if (!a || a.componentType !== 5126 || a.type !== 'VEC3' || a.bufferView === undefined || a.sparse) bake = false;
+                    else if (accOff.has(ai)) bake = false;   // shared by 2 primitives: offsets could differ
+                    else accOff.set(ai, l);
+                });
+            });
+        }
+        if (bake) {
+            const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+            accOff.forEach((l, ai) => {
+                const a = accs[ai], bv = gltf.bufferViews[a.bufferView];
+                const stride = bv.byteStride || 12, base = (bv.byteOffset || 0) + (a.byteOffset || 0);
+                for (let i = 0; i < a.count; i++) {
+                    const o = base + i * stride;
+                    for (let k = 0; k < 3; k++) dv.setFloat32(o + k * 4, dv.getFloat32(o + k * 4, true) + l[k], true);
+                }
+                // min/max from the stored float32 values (validator ACCESSOR_MIN_MISMATCH)
+                a.min = a.min.map((v, k) => Math.fround(v + l[k]));
+                a.max = a.max.map((v, k) => Math.fround(v + l[k]));
+            });
+            // Empty leaf nodes (annotation points etc.) move by the same world offset.
+            let leaves = 0;
+            Object.keys(W).forEach((ni) => {
+                const n = nodes[ni];
+                if (+ni === rootIdx || n.mesh !== undefined || (n.children && n.children.length)) return;
+                moveNode(n, dir(linInv(P[ni]), d)); leaves++;
+            });
+            log(`centre at origin: moved by ${d.map((v) => v.toFixed(4)).join(', ')} (${size}), baked into ${accOff.size} vertex lists, ${leaves} empty nodes moved`);
+            return;
+        }
+
+        // Node offset: into scene_root's children, in scene_root's local space.
+        const o = dir(linInv(localMat(nodes[rootIdx])), d);
         const kids = (nodes[rootIdx].children || []).slice();
         const animT = new Set();
-        (animations || []).forEach((an) => an.channels.forEach((ch) => {
-            if (ch.target.path === 'translation' || ch.target.path === 'matrix') animT.add(ch.target.node);
+        (gltf.animations || []).forEach((an) => an.channels.forEach((ch) => {
+            if (ch.target.path === 'translation') animT.add(ch.target.node);
         }));
         let targets = kids;
         if (kids.some((k) => animT.has(k))) {
@@ -3856,12 +3912,8 @@
             nodes[rootIdx].children = [wi];
             targets = [wi];
         }
-        targets.forEach((k) => {
-            const n = nodes[k];
-            if (n.matrix) { n.matrix[12] += o[0]; n.matrix[13] += o[1]; n.matrix[14] += o[2]; }
-            else n.translation = [0, 1, 2].map((i) => (n.translation ? n.translation[i] : 0) + o[i]);
-        });
-        log(`centre at origin: moved by ${d.map((v) => v.toFixed(4)).join(', ')} (size ${(hi[0] - lo[0]).toFixed(4)} x ${(hi[1] - lo[1]).toFixed(4)} x ${(hi[2] - lo[2]).toFixed(4)})`);
+        targets.forEach((k) => moveNode(nodes[k], o));
+        log(`centre at origin: moved by ${d.map((v) => v.toFixed(4)).join(', ')} (${size}), node offset (skinned, animated or shared meshes)`);
     }
 
     function _downloadGLBSync(skipGlb) {
@@ -4711,8 +4763,6 @@
                 if (same) delete n.matrix;   // validator NODE_MATRIX_DEFAULT
             });
 
-            if (CONFIG.CENTRE_AT_ORIGIN) centreSceneRoot(nodes, meshes, accs, sceneRootIdx, animations);
-
             const rootNodes = [sceneRootIdx];
             nodes.forEach((n) => {
                 if (n.children && n.children.length === 0) delete n.children;
@@ -4755,6 +4805,7 @@
             }
             binChunks.length = 0;   // the joined copy is the only one kept
             if (CONFIG.SPLIT_LOOSE_PARTS) binAll = splitLooseParts(gltf, binAll);
+            if (CONFIG.CENTRE_AT_ORIGIN) centreScene(gltf, binAll);
             const modelName = modelBaseName().replace(/[\\\/:*?"<>|]/g, '_') || 'model';
             if (skipGlb) return { glb: null, gltf, bin: binAll, zipTex, modelName };
 
