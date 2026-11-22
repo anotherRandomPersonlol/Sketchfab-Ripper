@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.7.3
 
 ### Added
 - **Split into loose parts** setting (off by default). The viewer merges objects that share a material and cuts the result into pieces of at most 65,535 vertices, through the objects. With the setting on, the export joins the pieces again and writes one mesh per connected part, for example the 32 teeth of a dental model instead of 9 cut pieces. Vertices are joined only at exactly the same position, so objects that touch stay separate. Works for GLB and FBX.
