@@ -1,12 +1,14 @@
 name: Model does not export correctly
 description: Report a model that exports with missing, wrong or broken parts.
-title: "[Bug] <model name>: <short problem>"
+title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
         Use this form when a model exports with a problem. Give all the data that the form asks for. Without the model link and the console log, we cannot find the cause.
+
+        **Title:** after `[Bug]`, write the model name and the problem, for example `[Bug] Oscars Dolby Theater: 3 textures missing`.
 
         Before you send the report:
         1. Install the latest version of the script.
