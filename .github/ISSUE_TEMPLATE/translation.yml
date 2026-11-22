@@ -1,8 +1,12 @@
 name: Translation problem
 description: A text in the panel is wrong, unclear or still in English in your language.
-title: "[Translation] <language>: <short description>"
+title: "[Translation] "
 labels: ["translation"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title:** after `[Translation]`, write the language and the problem, for example `[Translation] Polish: settings tooltip cut off`.
   - type: dropdown
     id: language
     attributes:
