@@ -12,7 +12,15 @@
     var lines = window.__matModelProbe = [];
     function L(s) { lines.push(s); console.log(TAG, s); }
 
-    var am = window.allmodel || [];
+    // Optional: set window.__matProbeMatch = 'part of a mesh or material name' before pasting, to
+    // show only the materials of those meshes (up to 4).
+    var MATCH = String(window.__matProbeMatch || '').toLowerCase();
+    var am = (window.allmodel || []).filter(function (o) {
+        if (!MATCH) return true;
+        var n = String(o._name || ''), c = o._parents && o._parents[0], g = 0;
+        while (c && g++ < 12) { n += ' ' + (c._name || ''); c = c._parents && c._parents[0]; }
+        return n.toLowerCase().indexOf(MATCH) !== -1;
+    });
     L('allmodel length = ' + am.length);
     if (!am.length) { L('empty: wrong frame or model not loaded'); return lines.join('\n'); }
 
