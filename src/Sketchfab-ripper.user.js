@@ -80,6 +80,7 @@
         KEEP_STILL_CLIPS: false,    // true: a clip in which no joint moves is exported as a pose clip (2 equal keys); false: such clips are left out
         EXPORT_ANNOTATIONS: false,  // true: each Sketchfab annotation becomes an empty node (title as name, text and camera view in extras)
         SPLIT_LOOSE_PARTS: false,   // true: the viewer's mesh pieces are joined again and split into one mesh per connected part
+        CENTRE_AT_ORIGIN: false,    // true: the model is moved so its centre is at the origin and its lowest point at height 0
         DOUBLE_SIDED_AUTO: true,    // true: follow the viewer's Single Sided flag per material (cullFace != 0 -> single sided); false: use DOUBLE_SIDED for all
         LANGUAGE: 'auto',           // panel language: 'auto' (browser language) or a key of STRINGS ('en', 'pl')
         DOUBLE_SIDED: true          // true: mark every material doubleSided (matches Sketchfab's default, Single Sided OFF); untick for single-sided export
@@ -212,6 +213,8 @@
             set_annot_tip: 'On: each annotation of the model becomes an empty object at its point, named after its title. The text and the camera view are kept as custom properties. Off: annotations are not exported.',
             set_split: 'Split into loose parts:',
             set_split_tip: 'On: mesh pieces that the viewer cut apart are joined again, and every connected part becomes its own object (for example each tooth of a dental model). Animated meshes are left as they are. Off: the meshes are exported as the viewer holds them.',
+            set_centre: 'Centre at origin:',
+            set_centre_tip: 'On: the model is moved so its centre is at the origin and its lowest point is at height 0 (models often sit far from the origin in Sketchfab\'s scene). Off: the model keeps its position from the viewer.',
             set_vcolor: 'Vertex color sRGB>linear:',
             set_vcolor_tip: 'On: converts vertex colors to linear color, as glTF requires. The colors then look as in the viewer. Off: writes the colors unchanged.',
             set_flat_mr: 'Flat metal/rough from viewer:',
@@ -309,6 +312,8 @@
             set_annot_tip: 'Włączone: każda adnotacja modelu staje się pustym obiektem w swoim punkcie, nazwanym jej tytułem. Tekst i widok kamery są zapisane jako własne właściwości. Wyłączone: adnotacje nie są eksportowane.',
             set_split: 'Rozdziel na luźne części:',
             set_split_tip: 'Włączone: kawałki siatki pocięte przez przeglądarkę są łączone z powrotem, a każda połączona część staje się osobnym obiektem (np. każdy ząb modelu stomatologicznego). Animowane siatki zostają bez zmian. Wyłączone: siatki są eksportowane tak, jak trzyma je przeglądarka.',
+            set_centre: 'Wyśrodkuj w początku układu:',
+            set_centre_tip: 'Włączone: model jest przesuwany tak, aby jego środek był w początku układu, a najniższy punkt na wysokości 0 (modele często stoją daleko od początku układu w scenie Sketchfab). Wyłączone: model zachowuje pozycję z przeglądarki.',
             set_vcolor: 'Kolory wierzchołków sRGB>liniowe:',
             set_vcolor_tip: 'Włączone: zamienia kolory wierzchołków na liniowe, jak wymaga glTF. Kolory wyglądają wtedy tak jak w podglądzie 3D. Wyłączone: zapisuje kolory bez zmian.',
             set_flat_mr: 'Metaliczność/szorstkość z podglądu:',
@@ -406,6 +411,8 @@
             set_annot_tip: 'Вкл.: каждая аннотация модели становится пустым объектом в своей точке с её заголовком в качестве имени. Текст и вид камеры сохраняются как пользовательские свойства. Выкл.: аннотации не экспортируются.',
             set_split: 'Разделить на отдельные части:',
             set_split_tip: 'Вкл.: куски сетки, разрезанные просмотрщиком, снова соединяются, и каждая связная часть становится отдельным объектом (например, каждый зуб стоматологической модели). Анимированные сетки не меняются. Выкл.: сетки экспортируются так, как их хранит просмотрщик.',
+            set_centre: 'Центрировать в начале координат:',
+            set_centre_tip: 'Вкл.: модель сдвигается так, чтобы её центр был в начале координат, а самая нижняя точка на высоте 0 (в сцене Sketchfab модели часто стоят далеко от начала координат). Выкл.: модель сохраняет позицию из просмотрщика.',
             set_vcolor: 'Цвета вершин sRGB>линейные:',
             set_vcolor_tip: 'Вкл.: переводит цвета вершин в линейные, как требует glTF. Тогда цвета выглядят как в 3D-просмотре. Выкл.: записывает цвета без изменений.',
             set_flat_mr: 'Металличность/шероховатость из 3D-просмотра:',
@@ -503,6 +510,8 @@
             set_annot_tip: 'オン: モデルの各注釈が、その位置に注釈のタイトルを名前とする空のオブジェクトとして出力されます。テキストとカメラの視点はカスタムプロパティとして保存されます。オフ: 注釈はエクスポートしません。',
             set_split: 'ばらばらのパーツに分割:',
             set_split_tip: 'オン: ビューアーが分割したメッシュの断片を結合し直し、つながった部分ごとに別のオブジェクトにします（例: 歯科モデルの歯 1 本ずつ）。アニメーションするメッシュはそのままです。オフ: ビューアーが持つままのメッシュを出力します。',
+            set_centre: '原点に中央揃え:',
+            set_centre_tip: 'オン: モデルの中心が原点に、最も低い点が高さ 0 に来るように移動します（Sketchfab のシーンではモデルが原点から離れていることがよくあります）。オフ: ビューアーでの位置のままです。',
             set_vcolor: '頂点カラー sRGB>リニア:',
             set_vcolor_tip: 'オン: glTF の仕様どおり頂点カラーをリニアに変換します。色が3Dビューアーと同じに見えます。オフ: 色をそのまま書き出します。',
             set_flat_mr: '3Dビューアーのメタリック/ラフネス:',
@@ -600,6 +609,8 @@
             set_annot_tip: '켜짐: 모델의 각 주석이 해당 지점에 주석 제목을 이름으로 하는 빈 오브젝트가 됩니다. 텍스트와 카메라 시점은 사용자 지정 속성으로 저장됩니다. 꺼짐: 주석을 내보내지 않습니다.',
             set_split: '분리된 부분으로 나누기:',
             set_split_tip: '켜짐: 뷰어가 잘라 놓은 메시 조각을 다시 합치고, 연결된 부분마다 별도의 오브젝트로 만듭니다(예: 치아 모델의 치아 하나하나). 애니메이션 메시는 그대로 둡니다. 꺼짐: 뷰어가 가진 그대로 메시를 내보냅니다.',
+            set_centre: '원점에 중앙 맞춤:',
+            set_centre_tip: '켜짐: 모델의 중심이 원점에, 가장 낮은 점이 높이 0에 오도록 모델을 옮깁니다(Sketchfab 장면에서는 모델이 원점에서 멀리 있는 경우가 많습니다). 꺼짐: 뷰어에서의 위치를 그대로 유지합니다.',
             set_vcolor: '버텍스 컬러 sRGB>선형:',
             set_vcolor_tip: '켜짐: glTF 규칙대로 버텍스 컬러를 선형으로 바꿉니다. 그러면 색이 3D 뷰어와 같아 보입니다. 꺼짐: 색을 그대로 씁니다.',
             set_flat_mr: '3D 뷰어의 메탈릭/러프니스:',
@@ -697,6 +708,8 @@
             set_annot_tip: 'Activado: cada anotación del modelo se convierte en un objeto vacío en su punto, con su título como nombre. El texto y la vista de cámara se guardan como propiedades personalizadas. Desactivado: las anotaciones no se exportan.',
             set_split: 'Separar en partes sueltas:',
             set_split_tip: 'Activado: los trozos de malla que el visor cortó se vuelven a unir y cada parte conectada pasa a ser su propio objeto (por ejemplo, cada diente de un modelo dental). Las mallas animadas no se tocan. Desactivado: las mallas se exportan tal como las tiene el visor.',
+            set_centre: 'Centrar en el origen:',
+            set_centre_tip: 'Activado: el modelo se mueve para que su centro quede en el origen y su punto más bajo a altura 0 (en la escena de Sketchfab los modelos suelen estar lejos del origen). Desactivado: el modelo conserva su posición del visor.',
             set_vcolor: 'Color de vértices sRGB>lineal:',
             set_vcolor_tip: 'Activado: convierte los colores de vértice a lineales, como exige glTF. Así los colores se ven como en el visor 3D. Desactivado: escribe los colores sin cambios.',
             set_flat_mr: 'Metálico/rugosidad del visor:',
@@ -794,6 +807,8 @@
             set_annot_tip: 'Ligado: cada anotação do modelo vira um objeto vazio no seu ponto, com o título como nome. O texto e a vista da câmera ficam guardados como propriedades personalizadas. Desligado: as anotações não são exportadas.',
             set_split: 'Separar em partes soltas:',
             set_split_tip: 'Ligado: os pedaços de malha que o visualizador cortou são unidos de novo, e cada parte conectada vira um objeto próprio (por exemplo, cada dente de um modelo dentário). Malhas animadas ficam como estão. Desligado: as malhas são exportadas como o visualizador as guarda.',
+            set_centre: 'Centralizar na origem:',
+            set_centre_tip: 'Ligado: o modelo é movido para que o centro fique na origem e o ponto mais baixo na altura 0 (na cena do Sketchfab os modelos costumam ficar longe da origem). Desligado: o modelo mantém a posição do visualizador.',
             set_vcolor: 'Cor de vértice sRGB>linear:',
             set_vcolor_tip: 'Ligado: converte as cores de vértice para linear, como o glTF exige. As cores ficam como no visualizador 3D. Desligado: grava as cores sem mudança.',
             set_flat_mr: 'Metálico/rugosidade do visualizador:',
@@ -891,6 +906,8 @@
             set_annot_tip: 'An: jede Anmerkung des Modells wird ein leeres Objekt an ihrem Punkt, benannt nach ihrem Titel. Text und Kameraansicht werden als benutzerdefinierte Eigenschaften gespeichert. Aus: Anmerkungen werden nicht exportiert.',
             set_split: 'In lose Teile trennen:',
             set_split_tip: 'An: Netzstücke, die der Viewer zerschnitten hat, werden wieder verbunden, und jedes zusammenhängende Teil wird ein eigenes Objekt (zum Beispiel jeder Zahn eines Zahnmodells). Animierte Netze bleiben unverändert. Aus: Die Netze werden so exportiert, wie der Viewer sie hält.',
+            set_centre: 'Im Ursprung zentrieren:',
+            set_centre_tip: 'An: Das Modell wird so verschoben, dass seine Mitte im Ursprung und sein tiefster Punkt auf Höhe 0 liegt (in der Sketchfab-Szene liegen Modelle oft weit vom Ursprung entfernt). Aus: Das Modell behält seine Position aus dem Viewer.',
             set_vcolor: 'Vertexfarben sRGB>linear:',
             set_vcolor_tip: 'An: wandelt Vertexfarben in lineare Farben um, wie glTF es verlangt. Die Farben sehen dann aus wie in der 3D-Ansicht. Aus: schreibt die Farben unverändert.',
             set_flat_mr: 'Metallic/Roughness aus der 3D-Ansicht:',
@@ -988,6 +1005,8 @@
             set_annot_tip: 'Activé : chaque annotation du modèle devient un objet vide à son point, nommé d\'après son titre. Le texte et la vue caméra sont gardés comme propriétés personnalisées. Désactivé : les annotations ne sont pas exportées.',
             set_split: 'Séparer en parties libres :',
             set_split_tip: 'Activé : les morceaux de maillage que la visionneuse a découpés sont réunis, et chaque partie connectée devient un objet à part (par exemple chaque dent d\'un modèle dentaire). Les maillages animés ne changent pas. Désactivé : les maillages sont exportés tels que la visionneuse les garde.',
+            set_centre: 'Centrer sur l\'origine :',
+            set_centre_tip: 'Activé : le modèle est déplacé pour que son centre soit à l\'origine et son point le plus bas à la hauteur 0 (dans la scène Sketchfab, les modèles sont souvent loin de l\'origine). Désactivé : le modèle garde sa position de la visionneuse.',
             set_vcolor: 'Couleurs de sommets sRGB>linéaire :',
             set_vcolor_tip: 'Activé : convertit les couleurs de sommets en couleurs linéaires, comme glTF l’exige. Les couleurs ressemblent alors à celles de la visionneuse 3D. Désactivé : écrit les couleurs sans changement.',
             set_flat_mr: 'Métal/rugosité de la visionneuse :',
@@ -1085,6 +1104,8 @@
             set_annot_tip: "开：模型的每个注释都会在其位置成为一个以注释标题命名的空对象，文字和相机视角保存为自定义属性。关：不导出注释。",
             set_split: "拆分为独立部件：",
             set_split_tip: "开：查看器切开的网格碎片会重新拼合，每个相连的部分成为单独的对象（例如牙齿模型中的每颗牙）。动画网格保持不变。关：按查看器中的原样导出网格。",
+            set_centre: "居中到原点：",
+            set_centre_tip: "开：移动模型，使其中心位于原点、最低点位于高度 0（在 Sketchfab 场景中模型常常离原点很远）。关：保持模型在查看器中的位置。",
             set_vcolor: "顶点颜色 sRGB>线性：",
             set_vcolor_tip: "开：按 glTF 要求将顶点颜色转换为线性颜色。颜色随后会与 3D 查看器中一致。关：颜色保持不变写入。",
             set_flat_mr: "使用 3D 查看器的金属度/粗糙度：",
@@ -3785,6 +3806,43 @@
         return compactGltf(gltf, bin, extra, firstExtra);
     }
 
+    // ====================================================================
+    // Centre at origin (CENTRE_AT_ORIGIN)
+    // ====================================================================
+    // The export keeps the model where it is in the viewer's scene, and many models sit far from
+    // the origin (the viewer frames the camera on them). This moves the whole scene (a translation
+    // added to scene_root, after the Y-up turn and the export scale) so the centre of the bounding
+    // box is at X = Z = 0 and the lowest point at Y = 0. The bounds use the rest pose: skinned and
+    // animated meshes are placed by their bind pose.
+    function centreSceneRoot(nodes, meshes, accs, rootIdx) {
+        const localMat = (n) => n.matrix || composeTRS({
+            translation: n.translation || [0, 0, 0], rotation: n.rotation || [0, 0, 0, 1], scale: n.scale || [1, 1, 1] });
+        const xf = (m, p) => [0, 1, 2].map((r) => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]);
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        const visit = (ni, parentW, depth) => {
+            const n = nodes[ni];
+            if (!n || depth > 256) return;
+            const W = mulMat4(parentW, localMat(n));
+            if (n.mesh !== undefined && meshes[n.mesh]) {
+                meshes[n.mesh].primitives.forEach((pr) => {
+                    const a = accs[pr.attributes && pr.attributes.POSITION];
+                    if (!a || !a.min || !a.max) return;
+                    for (let c = 0; c < 8; c++) {
+                        const p = xf(W, [c & 1 ? a.max[0] : a.min[0], c & 2 ? a.max[1] : a.min[1], c & 4 ? a.max[2] : a.min[2]]);
+                        for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
+                    }
+                });
+            }
+            (n.children || []).forEach((c) => visit(c, W, depth + 1));
+        };
+        visit(rootIdx, identityMat4(), 0);
+        if (!isFinite(lo[0])) { warn('centre at origin: no mesh bounds, model not moved'); return; }
+        const d = [-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2];
+        const m = nodes[rootIdx].matrix || (nodes[rootIdx].matrix = identityMat4());
+        m[12] += d[0]; m[13] += d[1]; m[14] += d[2];
+        log(`centre at origin: moved by ${d.map((v) => v.toFixed(4)).join(', ')} (size ${(hi[0] - lo[0]).toFixed(4)} x ${(hi[1] - lo[1]).toFixed(4)} x ${(hi[2] - lo[2]).toFixed(4)})`);
+    }
+
     function _downloadGLBSync(skipGlb) {
         try {
             const allNodes = window.allmodel;
@@ -4632,6 +4690,8 @@
                 if (same) delete n.matrix;   // validator NODE_MATRIX_DEFAULT
             });
 
+            if (CONFIG.CENTRE_AT_ORIGIN) centreSceneRoot(nodes, meshes, accs, sceneRootIdx);
+
             const rootNodes = [sceneRootIdx];
             nodes.forEach((n) => {
                 if (n.children && n.children.length === 0) delete n.children;
@@ -5207,6 +5267,7 @@
         checkSetting(configDiv, 'KEEP_STILL_CLIPS', 'set_still', 'keep still clips');
         checkSetting(configDiv, 'EXPORT_ANNOTATIONS', 'set_annot', 'export annotations');
         checkSetting(configDiv, 'SPLIT_LOOSE_PARTS', 'set_split', 'split into loose parts');
+        checkSetting(configDiv, 'CENTRE_AT_ORIGIN', 'set_centre', 'centre at origin');
         checkSetting(configDiv, 'VERTEX_COLOR_SRGB', 'set_vcolor', 'vertex color sRGB->linear');
         checkSetting(configDiv, 'FLAT_MR_FROM_VIEWER', 'set_flat_mr', 'flat metal/rough from viewer');
 
