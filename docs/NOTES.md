@@ -2,28 +2,29 @@
 
 Read the summary first. The sections after it record what we found and why the exporter works the way it does, in the order we found it. Later rounds can override earlier ones.
 
-## Summary (v1.1.0)
+## Summary (v1.7.4)
 
 ### How the script works
 1. `onbeforescriptexecute` (interceptor at the end of the file) patches the viewer bundle once per bundle URL. The patches add three hooks: `drawhookcanvas` and `drawhookimg` capture textures when the viewer uploads and draws them, and `attachbody` collects every drawn geometry into `window.allmodel`.
 2. `attachbody` merges a geometry only when it is the same object drawn again (name, vertex count and a sampled vertex fingerprint all match).
 3. Recording (`recordClipRealtime`, manual RECORD) stores a `snapshotFrame()` per kept frame: world matrix, skinning palette and morph weights of every mesh. `RECORD_FPS` thins the frames.
-4. Export (`downloadGLB`): wait for textures, merge metallic-roughness and opacity images, then `_downloadGLBSync` builds the glTF:
-   - geometry: all triangle primitives merged into one triangle list, strips and fans converted, bridging slivers dropped;
-   - materials: textures by channel, flat values from the material model for channels without a real image (colour atlas counts as no image), opacity merged into base colour alpha;
-   - skins: the real bone hierarchy when the rig can be read (see Round 23); otherwise one flat joint per palette entry under `skel_root_<mesh>` (identity inverse bind matrices). Flat joints with shear get a helper parent (SVD: helper = T*U*S, joint = V^T);
-   - animation: per clip, per joint T/R/S channels (helper and joint for sheared joints), hold keys for show/hide-by-scale switches;
-   - unused textures pruned, file names made ASCII-safe, GLB plus textures zipped.
+4. Export (`downloadGLB`): download textures that have no protection key (Round 30), wait for the rest, merge metallic-roughness and opacity images, then `_downloadGLBSync` builds the glTF:
+   - geometry: all triangle primitives merged into one triangle list, strips and fans converted, bridging slivers dropped,
+   - materials: textures by channel, flat values from the material model for channels without a real image (colour atlas counts as no image), opacity merged into base colour alpha,
+   - skins: the real bone hierarchy when the rig can be read (see Round 23), otherwise one flat joint per palette entry under `skel_root_<mesh>` (identity inverse bind matrices). Flat joints with shear get a helper parent (SVD: helper = T*U*S, joint = V^T),
+   - animation: per clip, per joint T/R/S channels (helper and joint for sheared joints), hold keys for show/hide-by-scale switches,
+   - optional passes on the finished glTF: split into loose parts (Round 29), then centre at origin (Round 31),
+   - unused textures pruned, file names made ASCII-safe, GLB (or FBX, Round 24) plus textures zipped.
 
 ### Rules that came out of testing
-- Real-time recording is the only reliable path; seeking while paused updates palettes too sparsely.
-- Textures exist only after the viewer draws them. Wait for the model before exporting.
+- Real-time recording is the only reliable path, seeking while paused updates palettes too sparsely.
+- Keyed textures exist only after the viewer draws them, unkeyed ones are downloaded directly (Round 30). Wait for the model before exporting.
 - `_channelMapping >= 0` does not mean a real texture: texture-less materials point at a generated colour atlas.
 - `cullFace` 1029 (GL_BACK) = Single Sided ON, 0 = OFF. Sketchfab's default is OFF.
-- Vertex colour bytes are sRGB; glTF COLOR_0 is linear.
-- Big models come in unnamed chunks of up to 65532 vertices; never dedupe by name and vertex count alone.
-- Skinning palettes can contain shear; TRS alone cannot store it.
-- Expression rigs hide parts by scaling bones to 0; keep zero scale and keep the switch instant.
+- Vertex colour bytes are sRGB, glTF COLOR_0 is linear.
+- Big models come in unnamed chunks of up to 65532 vertices, never dedupe by name and vertex count alone.
+- Skinning palettes can contain shear, TRS alone cannot store it.
+- Expression rigs hide parts by scaling bones to 0, keep zero scale and keep the switch instant.
 
 ### Testing
 - Acceptance: the glTF validator has no errors, and the glTF viewer (three.js) looks like Sketchfab. Blender approximates sheared bones, so small face artifacts there are expected.
@@ -88,7 +89,7 @@ much harder than the palette path we used.
 
 ### 10. Gotchas learned the hard way
 - MutationObserver scope matters. Watching `document.head` only
-  catches chunks that go into head; many webpack chunks (including
+  catches chunks that go into head, many webpack chunks (including
   the ones with our anchors on some loads) go into body. Watching
   `document` catches both. Symptom of head-only: `patch_0/4` never
   fire even though the loader completes.
@@ -122,10 +123,10 @@ node). Useful members:
 - Seeking while paused (`setSeekTime`) updates the palette only
   every 15-20 frames. Record in real time instead.
 - Frame times come from `getSimulationTime()` (wall-clock fallback).
-- `getSimulationTime()` runs at wall speed; the playback speed (x0.1 to x2) is `getTimeFactor()` / `_timeFactor`
+- `getSimulationTime()` runs at wall speed, the playback speed (x0.1 to x2) is `getTimeFactor()` / `_timeFactor`
   (probe 2026-10-20: ratio 1.0 at x0.5 with `_timeFactor` 0.5). A speed change rescales the clock so that
   `getSimulationTime() * getTimeFactor()` stays continuous (probe 2026-10-21, `tools/probe-speed-change.js`: x1 -> x2
-  turns 15.65 into 7.85, x0.5 -> x0.1 turns 37.07 into 185.85). That product is the clip time; the recorder adds its
+  turns 15.65 into 7.85, x0.5 -> x0.1 turns 37.07 into 185.85). That product is the clip time, the recorder adds its
   increase per frame. (The first version added raw clock deltas x speed and took the rescale jumps as clip time.)
   The recorder stops as "clock stalled" only when that clip time does not move for 3 s of wall time.
   The viewer defaults to "Play all" and can switch clips at the end of
@@ -160,8 +161,8 @@ Five regex patches run on the viewer bundles (anchors in section 8):
 - patch_0 `/A\.renderInto\(n,E,R/g` inserts `,i`
 - patch_1 `/g\.renderInto=function\(e,i,r/g` inserts `,image_data`
 - patch_2 `/t\.drawArrays\(t\.TRIANGLES,0,6\)/g` inserts `,window.drawhookimg(t,image_data)`
-- patch_3 `/getResourceImage:function\(e,t\){/g` inserts `e = window.drawhookcanvas(e,this._imageModel);`
-- patch_4 `/(this\._stateCache\.drawGeometry\(this\._graphicContext,t\))/g` inserts `;try{window.attachbody(t);}catch(_){}`
+- patch_3 `/getResourceImage:function\(e,t\){/g` inserts `e = window.drawhookcanvas(e,this._imageModel),`
+- patch_4 `/(this\._stateCache\.drawGeometry\(this\._graphicContext,t\))/g` inserts `,try{window.attachbody(t),}catch(_){}`
 
 If the console shows `init` and `panel added` but no `patched` lines, the
 wrong bundle was served. Reload (the panel hints after 8 s and reloads
@@ -177,7 +178,7 @@ at insertion time (hook `appendChild`/`insertBefore`) instead of removing it aft
 
 ### 16. Fixed gotchas (do NOT regress)
 - The MutationObserver must watch `document`, not `document.head`.
-- Guard per-frame pixel reads: `if (saveimagecache2[url].dataURL) return;`
+- Guard per-frame pixel reads: `if (saveimagecache2[url].dataURL) return,`
 - The viewer runs in an iframe (URL contains `/embed`). Never add a
   top-frame-only guard.
 - Vertex transform glTF evaluates: `worldVertex = YUP * W_mesh * palette[i] * restVertex`
@@ -199,17 +200,17 @@ at insertion time (hook `appendChild`/`insertBefore`) instead of removing it aft
 - Opacity: a separate Opacity image is merged into the base color alpha
   (`<mesh>_Alpha.png`, material `alphaMode: BLEND`), using the mask's
   luminance (black = see-through). Mask and color can share one metadata
-  name, so they are matched by URL. Not yet checked in Blender.
-- Vertex colors: the Sketchfab `Color` attribute (Uint8 RGBA) is written
-  as `COLOR_0` (normalized UNSIGNED_BYTE). Not yet verified in Blender.
-  Whether the values are sRGB or linear is unchecked. Constant base
-  color factors of texture-less materials are not read (always white).
-- Morph targets (Vertex_k/Normal_k deltas) and per-clip morph weights are exported, plus node TRS animation for unskinned meshes (e.g. "Sphere_1" translate). Implemented in 17.1.x; pending verification on the vertex-colour light-ball model.
+  name, so they are matched by URL. Additive opacity without an image uses
+  the brightest colour channel as alpha (Round 30).
+- Vertex colors: the Sketchfab `Color` attribute (Uint8 RGBA, sRGB) is written
+  as `COLOR_0`, converted to linear by default (setting "Vertex color sRGB>linear").
+- Morph targets (Vertex_k/Normal_k deltas), per-clip morph weights and node TRS
+  animation for unskinned meshes are exported (Light Ball, Round 22).
 - Statesets: on some models (the Kalibr) the material and its textures sit
   on the parent node named after the material, not on the mesh.
-- No EmitColor channel
-- Units are Sketchfab's, often cm. glTF expects metres.
-- No batch download, no progress UI, and no check for a 0-mesh export
+- Units are Sketchfab's, often cm. Use the Export scale setting (0.01 for cm).
+- No batch download, and no check for a 0-mesh export.
+- `window.allmodel` is not cleared on a model switch (section 10).
 
 ### 19. Regression values (Patriot, rest pose)
 Battery mesh (M_Patriot_Battery_Tires), bone 0 palette:
@@ -218,7 +219,7 @@ Truck mesh (M_PATRIOT_Radar_Tires), bone 0 palette:
 `1 0 0 0 / 0 0 -1 420.489 / 0 1 0 -0`
 
 ### 20. Test procedure
-1. Hard reload the Patriot page. Expect `patched ...` lines and `panel added`; the panel shows `meshes: 7`.
+1. Hard reload the Patriot page. Expect `patched ...` lines and `panel added`, the panel shows `meshes: 7`.
 2. RECORD (or RECORD ALL CLIPS), then DOWNLOAD GLB. The log should be clean through `export done`.
 3. The ZIP holds the GLB (about 4 MB) and a `textures/` folder.
 4. Check the GLB in gltf-viewer.donmccurdy.com and in Blender: upright, textured, animated.
@@ -231,51 +232,52 @@ Truck mesh (M_PATRIOT_Radar_Tires), bone 0 palette:
 - Joints fly apart: the quaternion hemisphere fix (section 6) is missing.
 - Model on its side: YUP must be on scene_root only, once, and skel_root must hold W_mesh.
 - Joints at the origin: W_mesh was not read from the mesh node.
-- Model too small or large in Blender: units are cm, scale by 0.01.
+- Model too small or large in Blender: units are often cm, set Export scale (0.01).
 - Only the first animation plays in Blender: look in the NLA editor for a
   track overriding the action. Check the GLB in a glTF viewer first.
 
 ### 22. Code conventions
 `log()`, `warn()` and `err()` (prefixed `[Ripper]`) once per significant
-action, never inside per-frame or per-vertex loops. ES5 only: `var`,
-function declarations, no arrows, template literals or destructuring.
-Sections are separated with `// ====`.
+action, never inside per-frame or per-vertex loops. Modern syntax since
+Round 22: `let`/`const`, arrow functions, template literals, keep function
+declarations where hoisting is needed, and named functions where `this` is used.
+Sections are separated with `// ====`. Run `node --check` after every edit.
 
 
 ## Auto single-clip record
-RECORD with exactly one active clip restarts it and records one full loop (0..duration) automatically, reusing `recordClipRealtime`; STOP keeps the partial frames. With no manager or no active clip it falls back to the manual timer (`MAX_RECORD_SECONDS`). RECORD ALL CLIPS is greyed out when the manager has fewer than 2 clips (polled every 2 s). Verified on the vertex-colour light ball: morph targets, node translation and morph weight animation all export correctly (validator clean).
+RECORD with exactly one active clip restarts it and records one full loop (0..duration) automatically, reusing `recordClipRealtime`, STOP keeps the partial frames. With no manager or no active clip it falls back to the manual timer (`MAX_RECORD_SECONDS`). RECORD ALL CLIPS is greyed out when the manager has fewer than 2 clips (polled every 2 s). Verified on the vertex-colour light ball: morph targets, node translation and morph weight animation all export correctly (validator clean).
 
 ## Double sided
-Sketchfab's "Single Sided" is OFF by default (both sides rendered), so `CONFIG.DOUBLE_SIDED` now defaults to true (settings checkbox "Double sided" to turn off). Cull-mode probe (`tools/probe-cullmode.js`) showed identical stateset slots (all `_value=1`) on the light ball and Kalibr with Single Sided OFF; the ON state was never captured, so there is no per-model auto-detection. Saved settings (localStorage `ripper_config_v1`) override the default: users who saved config earlier must tick the box once.
+Sketchfab's "Single Sided" is OFF by default (both sides rendered), so `CONFIG.DOUBLE_SIDED` now defaults to true (settings checkbox "Double sided" to turn off). Cull-mode probe (`tools/probe-cullmode.js`) showed identical stateset slots (all `_value=1`) on the light ball and Kalibr with Single Sided OFF, the ON state was never captured, so there is no per-model auto-detection. Saved settings (localStorage `ripper_config_v1`) override the default: users who saved config earlier must tick the box once.
 
 ## Vertex colour space
 Light ball `Color` bytes: gray ring 35,36,37 .. 91,93,96. In the Inspector's Vertex Color view the same ring reads about 56..93 (screenshot pixel picker), i.e. inside the byte range, so the viewer shows the bytes as is (sRGB, no gamma applied). glTF COLOR_0 is linear, so `CONFIG.VERTEX_COLOR_SRGB` (default true) converts RGB sRGB->linear and writes float COLOR_0, which makes glTF viewers look like Sketchfab. Untick the "Vertex color sRGB>linear" setting for raw bytes. Alpha is never converted. Confirmed visually in a glTF viewer (linear tone mapping): matches Sketchfab.
 
 ## Flat material values (texture-less channels)
-Each material's flat values live in `stateset._attributeArray[0]._materialModel.attributes.channels.<Name>.attributes` (`enable`, `factor`, `color`; linear colours). Found with `tools/probe-material-factors.js` on the GoldRing model: AlbedoPBR.color [0.5,0.466,0] equals osg.Material `_diffuse` / 0.8 (DiffuseColor.factor 0.8) and matches the Inspector's Base Color view. Sketchfab's values differ from the source file (Blender showed metal 0 / rough 0.5; the viewer has metal 0.92 / rough 0.25), the export follows the viewer. `getMaterialChannels(obj)` reads them; for channels without a texture the exporter writes `baseColorFactor`, `metallicFactor`, `roughnessFactor` and `emissiveFactor` (log: `flat values from material model`). Textured channels keep factor 1. Also seen: `attributes.cullFace = 0` (Single Sided OFF); the ON value was not captured yet, a candidate for automatic doubleSided. Opacity factor is not applied.
+Each material's flat values live in `stateset._attributeArray[0]._materialModel.attributes.channels.<Name>.attributes` (`enable`, `factor`, `color`, linear colours). Found with `tools/probe-material-factors.js` on the GoldRing model: AlbedoPBR.color [0.5,0.466,0] equals osg.Material `_diffuse` / 0.8 (DiffuseColor.factor 0.8) and matches the Inspector's Base Color view. Sketchfab's values differ from the source file (Blender showed metal 0 / rough 0.5, the viewer has metal 0.92 / rough 0.25), the export follows the viewer. `getMaterialChannels(obj)` reads them, for channels without a texture the exporter writes `baseColorFactor`, `metallicFactor`, `roughnessFactor` and `emissiveFactor` (log: `flat values from material model`). Textured channels keep factor 1. Also seen: `attributes.cullFace = 0` (Single Sided OFF), the ON value was not captured yet, a candidate for automatic doubleSided. Opacity factor is not applied.
 
-Fix after first test on the ring: `getChannelTextureMap` can return placeholder entries (no url/name) for channels, so "has a texture" is decided by `baseColorTexture` being set (albedo) or the entry having a url/name (metalness, roughness, emission). Texture-less models have no UV in the viewer (`texCoordUnitList = []`, no TexCoord attribute), so UVs cannot be exported for them; only the artist's download has them.
+Fix after first test on the ring: `getChannelTextureMap` can return placeholder entries (no url/name) for channels, so "has a texture" is decided by `baseColorTexture` being set (albedo) or the entry having a url/name (metalness, roughness, emission). Texture-less models have no UV in the viewer (`texCoordUnitList = []`, no TexCoord attribute), so UVs cannot be exported for them, only the artist's download has them.
 
 ## Multiple primitives, quads, scale (ring findings)
 - The viewer triangulates quads, so exported meshes are triangles (inherent).
-- The ring export had 2 triangle holes: only `primitives[0]` was exported. All triangle-type primitives (lists, strips, fans) are now merged into one TRIANGLES index list; log line `primitives: <mesh> n (mode x indices ...)` shows what a mesh carries. Pending verification on the ring.
+- The ring export had 2 triangle holes: only `primitives[0]` was exported. All triangle-type primitives (lists, strips, fans) are now merged into one TRIANGLES index list, log line `primitives: <mesh> n (mode x indices ...)` shows what a mesh carries. Pending verification on the ring.
 - `FLAT_MR_FROM_VIEWER` setting: off writes neutral metal 0 / rough 0.5 for texture-less materials (the viewer's values differ from the artist's download).
-- Scale: the ring export is exactly 100x the artist download (0.506662 vs 0.005066 high); the model is in centimetres. `CONFIG.EXPORT_SCALE` (setting "Export scale", default 1, use 0.01 for such models) scales the scene_root matrix. No automatic unit detection: the viewer exposes no unit field that we found.
-- DeepSeek's idea (intercept the raw encrypted/binary model data) would be a separate project; the viewer decodes it into the same buffers we read, and may differ only in triangulation/UV availability.
+- Scale: the ring export is exactly 100x the artist download (0.506662 vs 0.005066 high), the model is in centimetres. `CONFIG.EXPORT_SCALE` (setting "Export scale", default 1, use 0.01 for such models) scales the scene_root matrix. No automatic unit detection: the viewer exposes no unit field that we found.
+- DeepSeek's idea (intercept the raw encrypted/binary model data) would be a separate project, the viewer decodes it into the same buffers we read, and may differ only in triangulation/UV availability.
 
 ## Fixes from the anime girl / tree / neon sign tests
 - Zero-weight joints: any joint slot with weight 0 now points at joint 0 (validator ACCESSOR_JOINTS_USED_ZERO_WEIGHT, 38k warnings).
-- Normals are normalised on export (tree normals had length ~4.8 from instance scale); morph normal deltas use the normalised data.
+- Normals are normalised on export (tree normals had length ~4.8 from instance scale), morph normal deltas use the normalised data.
 - Every mesh goes through the triangle conversion (lists, strips, fans merged into TRIANGLES) and degenerate triangles (repeated index, strip joins) are dropped, which removes the long zero-area edges seen in Blender on the Patriot and others.
-- Emissive texture: `emissiveFactor` was left at the glTF default 0, which hides the texture; it is now [f,f,f] with f = EmitColor factor clamped to 0..1.
-- Flat values: texture presence now comes from the stateset `_channelMapping` (>= 0 = textured); a flat colour is never written over a textured channel. Each material logs `texture channels [...] mapping [...]` to debug lookups.
+- Emissive texture: `emissiveFactor` was left at the glTF default 0, which hides the texture, it is now [f,f,f] with f = EmitColor factor clamped to 0..1.
+- Flat values: texture presence now comes from the stateset `_channelMapping` (>= 0 = textured), a flat colour is never written over a textured channel. Each material logs `texture channels [...] mapping [...]` to debug lookups.
 - Opacity stored in the base colour file's alpha (log "uses one file for color and opacity"): material gets alphaMode MASK (cutoff 0.5) or BLEND depending on the viewer's Opacity `type`.
-- Open: anime girl base colour textures were not attached to materials (flat colours showed); needs the new `texture channels` log lines.
+- Open: anime girl base colour textures were not attached to materials (flat colours showed), needs the new `texture channels` log lines.
 
-## Round 3 (girl black, tree wrong texture, neon dark; tested on a slow laptop)
+## Round 3 (girl black, tree wrong texture, neon dark, tested on a slow laptop)
 - Removed the "no texture assigned -> use texture 0" fallback: it painted an unrelated image (ground noise) over the whole tree. A material with no captured texture now exports plain and logs `no texture found in the capture pool`.
 - New warning per material: `channels with a texture in the viewer but not in the export: ...` (stateset channel mapping says textured, lookup in the capture pool failed). Prime suspect on slow machines: textures not captured before export (TEXTURE_WAIT_SECONDS 12 may be too short).
-- Disabled MetalnessPBR channel without texture now writes metallicFactor 0 (glTF default 1 renders fully metallic = black); suspected cause of the black girl.
+- Disabled MetalnessPBR channel without texture now writes metallicFactor 0 (glTF default 1 renders fully metallic = black), suspected cause of the black girl.
 - Identity node matrices are omitted (validator NODE_MATRIX_DEFAULT).
 - Unverified: neon emission, girl black cause. Need the `material ...` log lines from those exports.
 
@@ -289,7 +291,7 @@ Log `bundle already patched, dropping duplicate` means the guard fired.
 
 ## Round 4 test results (tree, neon, girl)
 - Neon emission: confirmed working.
-- Anime girl black/blue: not a bug. A separate outline mesh needs Single Sided ON; with the default
+- Anime girl black/blue: not a bug. A separate outline mesh needs Single Sided ON, with the default
   double-sided export it covered the girl. Turn "Double sided" off in the panel for such models
   (auto detection via cullFace still open, ON value never captured).
 - Tree transparency: leaves use the `AlphaMask` channel (separate image, albedo PNG has no alpha).
@@ -300,13 +302,13 @@ Log `bundle already patched, dropping duplicate` means the guard fired.
 
 ## Auto single sided (round 5, unverified)
 `getMaterialChannels` now returns `__cull` (= `_materialModel.attributes.cullFace`). Export logs
-`material X: cullFace=<v>` for every material; a non-zero value is treated as Single Sided ON and the material
+`material X: cullFace=<v>` for every material, a non-zero value is treated as Single Sided ON and the material
 is NOT marked doubleSided (setting "Auto single sided", `DOUBLE_SIDED_AUTO`, default on). Needs confirming on the
 anime girl: the outline mesh should log a non-zero cullFace and the others 0. If the girl logs 0 everywhere, the flag
 lives somewhere else and needs a probe.
 
 ## External review triage (round 5)
-A fresh-Claude read-only review gave 30 findings; each was checked against the code.
+A fresh-Claude read-only review gave 30 findings, each was checked against the code.
 Fixed: bundle fetch error handling (original script keeps running on failure), RE lastIndex reset, no closing
 blend frame on cancelled/truncated clip records, unguarded rest0 for late meshes, vanished clip list item, 16-bit
 index limit (< 65535), width-0 loop hang, point mode no longer treated as triangles, empty/out-of-range indices
@@ -320,9 +322,9 @@ O(n^2) parent search (#25), manager cache re-validation (#15), normal/UV length 
 
 ## Texture packaging (round 6)
 Test 1 (two models without reload) gave validator "Failed to fetch /images/2, 7-8" and UNUSED_OBJECT for textures 1-2, 5-8, model looked fine.
-Now: texture files are written with ASCII-safe names (`[^A-Za-z0-9._-]` -> `_`, uniquified) and the glTF URIs match exactly;
+Now: texture files are written with ASCII-safe names (`[^A-Za-z0-9._-]` -> `_`, uniquified) and the glTF URIs match exactly,
 textures no material references are dropped from images/textures and from the zip (log: `textures: N used, M unused dropped`).
-Warning `channels with a texture in the viewer but not in the export: EmitColor` = that texture was never captured (never drawn); not fixed.
+Warning `channels with a texture in the viewer but not in the export: EmitColor` = that texture was never captured (never drawn), not fixed.
 Model-switch state reset (#1) still open: with pruning, leftovers no longer end up in the export.
 
 ## Round 7 (treehouse + small neon sign, unverified)
@@ -331,17 +333,17 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 - Treehouse: stray thin lines in the glTF viewer and missing patches (Blender 744k triangles vs ~2.3M strip indices). Possible cause: strip
   restart indices. Strips/fans now restart winding at any index >= vertex count and each primitive logs
   `indices: <mesh> mode N ... -> T triangles, restart/out-of-range X, degenerate Y, vertices V`. Needs a re-export log to tell.
-  Meshes also carry a second tiny `4x3` primitive (single triangle); not yet judged.
+  Meshes also carry a second tiny `4x3` primitive (single triangle), not yet judged.
 - Small neon sign exported with no textures at all (white): `texture channels []` although the viewer maps AlbedoPBR/EmitColor.
   Two changes: 32/64/128 px square images are only skipped while a larger variant exists (a texture whose real size is 128 is kept), and the
   "channels with a texture in the viewer but not in the export" warning plus a "no textures were captured at all" warning now also fire when
   no texture was captured. `tools/probe-textures.js` dumps the texture attribute structure for the case that does not fix it.
 
 ## Round 8 findings (neon sign, treehouse)
-- Treehouse: strips are fine (no restart indices, every mesh's triangles ~ vertices/2, i.e. all quads present; Blender 744k triangles = sum of
+- Treehouse: strips are fine (no restart indices, every mesh's triangles ~ vertices/2, i.e. all quads present, Blender 744k triangles = sum of
   the 28 captured meshes). Sketchfab reports 1.8M triangles, so the export holds only the geometry that was DRAWN at capture time
   (attachbody hooks drawGeometry): chunks outside the view/frustum are probably never captured. Test: orbit/zoom so everything is on screen and watch
-  `meshes:` in the panel. Stray long lines probably come from the lone `4x3` primitives; the export now logs `tiny primitive:` edge lengths for them.
+  `meshes:` in the panel. Stray long lines probably come from the lone `4x3` primitives, the export now logs `tiny primitive:` edge lengths for them.
 - Neon sign: the textures' `_image` is null (unref'd after upload, `_unrefImageDataAfterApply`), so nothing is captured through getResourceImage.
   `tools/probe-texture-gpu.js` checks whether pixels can be read back from the GPU texture instead.
 
@@ -353,11 +355,11 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 - Small neon sign: no image textures at all (source GLB checked in Blender: white base, metal 1, rough 1, red emission). Sketchfab packs
   texture-less materials' flat colours into a generated colour atlas (`_isColorAtlas`, size 0x0, no image), so `_channelMapping` shows
   AlbedoPBR/EmitColor = 0 and the exporter treated them as textured and skipped the flat values. Now a channel only counts as textured with
-  a real image (url/name) that is not the atlas; log `colour atlas / no image for ..., using flat material values`.
+  a real image (url/name) that is not the atlas, log `colour atlas / no image for ..., using flat material values`.
 
 ## Round 10
-- Confirmed: treehouse holes fixed by the dedupe fingerprint (61 meshes instead of 27); neon colours come through via the colour-atlas
-  fallback; Patriot unchanged.
+- Confirmed: treehouse holes fixed by the dedupe fingerprint (61 meshes instead of 27), neon colours come through via the colour-atlas
+  fallback, Patriot unchanged.
 - Neon tubes lacked transparency: Opacity given only as a value (no mask image) is now written as baseColorFactor alpha + BLEND
   (log `opacity 0.xx (<type>)` in the flat values line).
 - Stripes: the `tiny primitive` diagnostic was replaced by a `long triangle:` diagnostic over every primitive (longest edge > 20x the mesh's
@@ -373,7 +375,7 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 
 ## Round 12
 - Treehouse stripes confirmed gone, but the first sliver rule also dropped real long thin rods on the Patriot (pattern `10672 10672 10673 10673
-  10674 *10675`, ~125 triangles; the "missing tube"). Rule tightened: a candidate is dropped only if one of its long edges (vertices welded by
+  10674 *10675`, ~125 triangles, the "missing tube"). Rule tightened: a candidate is dropped only if one of its long edges (vertices welded by
   position) is used by no other triangle, i.e. it spans a gap. Closed tubes share every long edge and stay. Remaining long triangles are
   logged as `kept (real geometry, edges shared)`.
 - decomposeMat4: zero scale was turned into 1 (`sx || 1`), so expression parts that anime rigs hide by scaling bones to 0 became visible
@@ -383,10 +385,10 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 - Open: girl's red visor exports white (material Accessoris: EmitColor + Opacity textures, no AlbedoPBR in mapping). Needs probe-material-factors output.
 
 ## Round 13
-- Patriot rods back, treehouse stripes gone (unshared-long-edge rule works; Patriot radar body still drops 8 - check visually if anything is missing).
+- Patriot rods back, treehouse stripes gone (unshared-long-edge rule works, Patriot radar body still drops 8 - check visually if anything is missing).
 - Girl visor (material Accessoris): AlbedoPBR enabled with factor 0 and NO colour value, colour comes from an emission texture (unlit anime
-  style), transparency from a separate Opacity image. Fixes: base colour = (colour or white) x factor even without a colour value; Opacity/AlphaMask
-  image without a colour image is merged into a white-RGB + alpha texture (`_opacityNoColor`) and the flat base colour still applies on top;
+  style), transparency from a separate Opacity image. Fixes: base colour = (colour or white) x factor even without a colour value, Opacity/AlphaMask
+  image without a colour image is merged into a white-RGB + alpha texture (`_opacityNoColor`) and the flat base colour still applies on top,
   opacity textures on a channel switched off in the viewer are no longer merged.
 - Girl face pulled toward the bubble centre: skin joints are exported as flat palette matrices (identity IBMs) decomposed to TRS. A palette with
   shear (non-uniform scale under rotation) cannot be stored as TRS. New per-skin warning `joint frame(s) have shear that TRS cannot store
@@ -395,7 +397,7 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
 ## Round 14: sheared joints stored exactly
 - Girl visor confirmed red/see-through.
 - Shear confirmed: skin 1 (Body) had 4895 joint frames that TRS cannot represent (max 20.3% at joint 36). Skin joints are flat palette
-  matrices (identity IBMs); a palette with non-uniform scale under rotation has shear.
+  matrices (identity IBMs), a palette with non-uniform scale under rotation has shear.
 - Fix: joints with shear (TRS error > 1e-3 in any frame) get a helper parent node `joint_<mesh>_<j>_shear`: helper = T * U * diag(s),
   joint = V^T, from a 3x3 SVD (`svdDecompose`, Jacobi on A^T A). Exact for any matrix (random test worst error 1.7e-15, mirrored and
   zero-scale cases included). Continuity across frames: V columns matched to the previous frame (order + sign), previous basis kept when the
@@ -403,24 +405,24 @@ Model-switch state reset (#1) still open: with pruning, leftovers no longer end 
   stored exactly as helper node + joint (U*S*Vt)`. Joints without shear keep the single-node TRS path.
 
 ## Round 15
-- Girl face confirmed much better (8 sheared joints per body skin now stored via helper nodes; residual max 2.3% before the fix path,
-  "only slightly noticeable"); Patriot fine.
+- Girl face confirmed much better (8 sheared joints per body skin now stored via helper nodes, residual max 2.3% before the fix path,
+  "only slightly noticeable"), Patriot fine.
 - New setting "Record FPS" (`RECORD_FPS`, 0 = every rendered frame (default, unchanged behaviour), 60/30/24/15). `fpsDue()` throttles both the
-  clip recorder and the manual RECORD loop. (The old `CLIP_FPS` key was removed later; `loadConfig` ignores unknown saved keys.)
-- Hidden tab: a `visibilitychange` listener warns when the tab is hidden during any recording (rAF pauses, frames skipped / clip truncated);
+  clip recorder and the manual RECORD loop. (The old `CLIP_FPS` key was removed later, `loadConfig` ignores unknown saved keys.)
+- Hidden tab: a `visibilitychange` listener warns when the tab is hidden during any recording (rAF pauses, frames skipped / clip truncated),
   README lists it under known limitations.
 
 ## Second external review triage (round 16)
-16 findings, each checked against the code; maths ones re-tested with node harnesses (scratch tests: random 3x3 SVD worst 1.3e-15,
+16 findings, each checked against the code, maths ones re-tested with node harnesses (scratch tests: random 3x3 SVD worst 1.3e-15,
 sequences stretch-rotating / largest-axis-to-0 / shear-growing / scale pulse all exact, max frame-to-frame rotation step 1.7 deg).
 Fixed:
 - F1 sliver rule: an open long edge only counts as a bridge when both of its ends touch real (non-candidate) triangles, so free thin
   cards (wires, grass, hair strips) stay.
-- F2 trsError measured over the whole matrix incl. translation, so large translations hid shear; now 3x3 part only.
+- F2 trsError measured over the whole matrix incl. translation, so large translations hid shear, now 3x3 part only.
 - F3 two equal singular values: basis of that plane chosen closest to the previous frame. Plus `svdSequence`: start at the first
   non-uniform frame and fill earlier (uniform) frames backwards, so a clip starting from an unscaled pose does not jump (was 49 deg).
 - F4 zero singular value at index 0/1 rebuilt from the two real U axes (was discarding the true U[2]).
-- F5 merged MR: a missing metal/rough map is stored as 255 and the flat factor (or 0 metal) applies; pool entry records hasM/hasR.
+- F5 merged MR: a missing metal/rough map is stored as 255 and the flat factor (or 0 metal) applies, pool entry records hasM/hasR.
 - F6 opacity type: Opacity channel with mask/dither/cutout type -> MASK.
 - F8 end-of-clip detection uses the last seen clock value, not only the last kept frame (RECORD_FPS gaps).
 - F9 RECORD / RECORD ALL refused while an export runs.
@@ -428,16 +430,16 @@ Fixed:
 - F11 try/catch around seek, togglePause, clip click and recordClipRealtime starts (no stuck REC state).
 - F12 opacitySource prefers a real image (Opacity, then AlphaMask) over placeholder/atlas entries.
 - F13 decompose with two zero axes keeps the remaining axis direction.
-- F14 fpsDue tolerance for rAF jitter; F15 texture file names unique case-insensitively.
-Deferred: F7 (skinned mesh under an animated non-bone ancestor; skel_root uses export-time world), F16 (merged texture lookup by pool key
-instead of name; collision only if an artist texture is literally named <mesh>_MR/_Alpha).
+- F14 fpsDue tolerance for rAF jitter, F15 texture file names unique case-insensitively.
+Deferred: F7 (skinned mesh under an animated non-bone ancestor, skel_root uses export-time world), F16 (merged texture lookup by pool key
+instead of name, collision only if an artist texture is literally named <mesh>_MR/_Alpha).
 
 ## Round 17 (girl face)
 - Patriot/treehouse/opacity fine after the second review fixes.
 - Girl: face in Blender edit mode (Tab) shows the raw bind mesh incl. hidden expression parts (normal). Small holes when playing in Blender:
-  Blender bones cannot carry shear (rest bones have no scale; the importer converts pose to per-bone TRS), so the exact helper-node
-  shear is approximated there; three.js composes it exactly.
-- Brief over-open mouth: expressions switch by scaling bones 0 <-> visible in a single viewer frame; LINEAR between two samples blended both
+  Blender bones cannot carry shear (rest bones have no scale, the importer converts pose to per-bone TRS), so the exact helper-node
+  shear is approximated there, three.js composes it exactly.
+- Brief over-open mouth: expressions switch by scaling bones 0 <-> visible in a single viewer frame, LINEAR between two samples blended both
   shapes. Now, per joint and clip, when the scale magnitude jumps between <= 1e-4*max and >= 0.1*max across consecutive samples, a hold key
   (copy of the previous sample) is inserted 1 ms (or half the gap) before the next sample, with its own time accessor. Log:
   `skin N: k joint channel set(s) with show/hide-by-scale switches kept instant (hold keys)`.
@@ -448,7 +450,7 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
   (7e-7), the 352 vertices on the 8 sheared face joints off by up to 0.9% of the model size. Cause: the helper node has non-uniform scale in its
   rest pose and Blender edit bones cannot hold scale. Importer options (bind pose guess off, bone direction) made it worse.
 - The SVD's right rotation V was constant over the clip (< 0.05 deg on 7 of 8 joints). New preferred path: IBM = Q^T with Q = V from the first
-  non-uniform frame, joint = P*Q (plain TRS, no helper). Used only when P*Q is TRS-exact (< 1e-3) in every frame of every clip; otherwise the
+  non-uniform frame, joint = P*Q (plain TRS, no helper). Used only when P*Q is TRS-exact (< 1e-3) in every frame of every clip, otherwise the
   helper node path stays. Static/unanimated sheared joints always use the IBM path (exact for one matrix).
 - Offline conversion of the same export to this layout: three.js-exact (9e-6) and Blender error 3e-5 (float precision), down from 1.2e-2.
   Log: `skin N: k sheared joint(s) stored exactly via the inverse bind matrix (plain TRS joints)`.
@@ -456,14 +458,14 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
 ## Round 19: wireframe overlay, validator infos, file size (v1.1.1, v1.1.2)
 
 - Test model "Simple rigged and animated character" (CC BY). The export had a second mesh: a LINES-only copy with the same 852 vertices, every segment a triangle edge. It is the viewer's wireframe display (Model Inspector > Wireframe). `wireOverlayTwin` skips a lines-only mesh when another mesh with triangles has the same sampled vertices. A line mesh without such a twin is still exported. `removeNodes` then removes its empty node and renumbers children, skin joints and animation targets.
-- 8 clips of that model are one-frame poses with no motion. They are not exported; the log lists them. The original Sketchfab download renders as a blob in the three.js glTF viewer: its 569 animation output accessors have a byteStride (validator ANIMATION_SAMPLER_ACCESSOR_WITH_BYTESTRIDE), which three.js reads as interleaved. Our export packs them tightly.
+- 8 clips of that model are one-frame poses with no motion. They are not exported, the log lists them. The original Sketchfab download renders as a blob in the three.js glTF viewer: its 569 animation output accessors have a byteStride (validator ANIMATION_SAMPLER_ACCESSOR_WITH_BYTESTRIDE), which three.js reads as interleaved. Our export packs them tightly.
 - Time accessors are created on first use, so clips without motion add no unused accessors.
-- File size: animation data was 97% of the GLB. `reduceKeys` keeps the first and last key and every key needed so that interpolation between kept keys stays within tolerance of every recorded sample (slerp for rotations, segments of at most 32 frames). Tolerances: translation 1e-5 x the largest mesh diagonal, rotation 1e-4 per quaternion component, scale 1e-4 x the largest scale value of the channel. On the test model 45% of the keys stay; the worst error at any recorded sample is within the tolerance (checked with exact glTF interpolation). Hold keys (show/hide by scale) stay because removing them breaks the tolerance. Setting: Reduce keyframes (REDUCE_KEYS, default on).
-- The zip uses DEFLATE (level 6); textures are stored, as PNG/JPEG are already compressed.
+- File size: animation data was 97% of the GLB. `reduceKeys` keeps the first and last key and every key needed so that interpolation between kept keys stays within tolerance of every recorded sample (slerp for rotations, segments of at most 32 frames). Tolerances: translation 1e-5 x the largest mesh diagonal, rotation 1e-4 per quaternion component, scale 1e-4 x the largest scale value of the channel. On the test model 45% of the keys stay, the worst error at any recorded sample is within the tolerance (checked with exact glTF interpolation). Hold keys (show/hide by scale) stay because removing them breaks the tolerance. Setting: Reduce keyframes (REDUCE_KEYS, default on).
+- The zip uses DEFLATE (level 6), textures are stored, as PNG/JPEG are already compressed.
 
 ## Round 20: Keep still clips (v1.2.0)
 
-- Setting KEEP_STILL_CLIPS (default off). Per skinned mesh, a clip is "still" when no joint of that skeleton moves in it (`jointClipMoves` is the old per-joint test, now a function). For a still clip every joint gets a pose from the clip's first frame, written as two equal keys at the first and last time of the clip, so the clip keeps its length. The same path as animated joints is used (IBM fix Q, shear helper node), only with one frame; the show/hide hold logic and keyframe reduction do not run for a pose.
+- Setting KEEP_STILL_CLIPS (default off). Per skinned mesh, a clip is "still" when no joint of that skeleton moves in it (`jointClipMoves` is the old per-joint test, now a function). For a still clip every joint gets a pose from the clip's first frame, written as two equal keys at the first and last time of the clip, so the clip keeps its length. The same path as animated joints is used (IBM fix Q, shear helper node), only with one frame, the show/hide hold logic and keyframe reduction do not run for a pose.
 - A clip that moves only an unskinned mesh or morph weights still counts as still for the skeleton and gets the skeleton pose too. The setting is off by default for that reason.
 - Not covered: pose clips of unskinned nodes or morph weights. Clips with no channel are still left out of the file.
 - Test needed: the "Simple rigged and animated character" model, which has 8 one-frame pose clips. Expect the log line `skin N: keeping 8 still clip(s) as pose clips` and 8 more animations in the glTF viewer, with the validator reporting no new errors.
@@ -472,90 +474,97 @@ instead of name; collision only if an artist texture is literally named <mesh>_M
 
 - Bug (also in older versions): Sit1 of "Simple rigged and animated character" looked wrong in the glTF viewer. Sit1 had 56 of 60 channels: joint 12 does not move in Sit1, so it got no channel, and the player showed it in the rest pose (here the Static Pose, which differs on 15/15 joints). Idle (28 channels missing), Stop (40) and Watch (20) had the same gap.
 - Fix: in a clip where a joint does not move, it gets a constant pose (2 equal keys from the clip's first frame) when that pose differs from the rest pose (`jointDiffersFromRest`, same 1e-5 test as the motion test). Same rule for node motion of unskinned meshes and for morph weights. Holds for node/morph are only written for clips that move something (or with Keep still clips on), so a still clip with the setting off is still left out.
-- Log: `skin N: k joint pose(s) held in clips where the joint does not move but is away from the rest pose`; node lines end with `pose held in k clip(s)`; morph lines end with `weights held`.
+- Log: `skin N: k joint pose(s) held in clips where the joint does not move but is away from the rest pose`, node lines end with `pose held in k clip(s)`, morph lines end with `weights held`.
 
 ## Round 22: modern syntax (v1.3.0, branch modern-syntax)
 
-- Conversion with `tools/migration/modernize.js`, in 4 commits: var to let/const (533 const, 234 let), function expressions to arrows (120, 8 with an expression body), single-line concatenations to template literals (115; multi-line chains and the 5 hook splice lines stay `+`), object shorthand (17), `...args` in log/warn/err. Formatting and comments unchanged; the line count is the same.
-- Kept as before: function declarations (hoisted; some are called above their definition), the event shim `Ev` and its prototype methods (they use `this`), named function expressions.
-- One change in ES5 first: `_exporting` declared at the top, because the recorders read it and are defined before the export code (with `let` that would be a TDZ risk).
+- Conversion with `tools/migration/modernize.js`, in 4 commits: var to let/const (533 const, 234 let), function expressions to arrows (120, 8 with an expression body), single-line concatenations to template literals (115, multi-line chains and the 5 hook splice lines stay `+`), object shorthand (17), `...args` in log/warn/err. Formatting and comments unchanged, the line count is the same.
+- Kept as before: function declarations (hoisted, some are called above their definition), the event shim `Ev` and its prototype methods (they use `this`), named function expressions.
+- One change made before the conversion, still in ES5: `_exporting` declared at the top, because the recorders read it and are defined before the export code (with `let` that would be a TDZ risk).
 - `tools/migration/verify.js`: structure equal after converting back, scope resolution equal (7541 references), no hard hazards, 23 reviewed hazards (all safe, see tools/migration/README.md), no early calls. ESLint (no-undef, no-use-before-define, no-loop-func, no-const-assign): 0 messages. The keyframe reduction, node removal and overlay tests give the same output on both files.
-- Test before merge: the same models on v1.2.1 and on the branch, same log lines and same GLB size; validator unchanged.
-- Browser test (merged): AIM-9L and Treehouse byte-identical GLBs and logs on both versions; Simple rigged character (RECORD ALL CLIPS, Keep still clips) same log lines and same nodes/meshes/skins/channel targets, only ±1 frame and keyframe counts differ (recording jitter); Blu twice on the modern build differs by 607 keys, so the earlier ES5/modern key gap is jitter too; Light Ball (vertex colours, morph targets, morph and node animation) exports without errors.
+- Test before merge: the same models on v1.2.1 and on the branch, same log lines and same GLB size, validator unchanged.
+- Browser test (merged): AIM-9L and Treehouse byte-identical GLBs and logs on both versions, Simple rigged character (RECORD ALL CLIPS, Keep still clips) same log lines and same nodes/meshes/skins/channel targets, only ±1 frame and keyframe counts differ (recording jitter), Blu twice on the modern build differs by 607 keys, so the earlier ES5/modern key gap is jitter too, Light Ball (vertex colours, morph targets, morph and node animation) exports without errors.
 
 ## Round 23: real bone hierarchy (v1.4.0, issue #2)
 
-- Issue #2: Simple rigged character, Static Pose, no recording. In Blender all bones were at the root, with no parents; clearing the pose broke the rig. Cause: flat joints with identity IBMs, so the bind pose of every bone is the skeleton root.
+- Issue #2: Simple rigged character, Static Pose, no recording. In Blender all bones were at the root, with no parents, clearing the pose broke the rig. Cause: flat joints with identity IBMs, so the bind pose of every bone is the skeleton root.
 - `getRigInfo(obj, n)` reads the osgjs rig: the bone list of `_rigTransformImplementation` (`_bonePalette`, or any array of objects with an inverse bind matrix), `getInvBindMatrixInSkeletonSpace()` / `_invBindInSkeletonSpace`, `getMatrixInSkeletonSpace()` / `_boneInSkeletonSpace`, the skeleton-to-geometry matrix T of the rig geometry (`_matrixFromSkeletonToGeometry`, inverse `_invMatrixFromSkeletonToGeometry`), bone names and parents (nearest ancestor in the bone list).
 - Check: the live palette must equal invT * boneWorld * invBind * T for every bone (relative error <= 1e-3), so the bone list order matches the palette.
 - Joints are written in skeleton space: skeleton root node = meshWorld * invT, IBM_i = invBind_i * T, joint G_i = T * palette_i * inverse(IBM_i) = boneWorld_i, node matrix = inverse(G_parent) * G_i. Recording is unchanged: every frame is converted from its palette. Skeleton space is needed because T can rotate: conjugating a bone with non-uniform scale by a rotation gives shear.
 - Fallback to flat joints when: no rig or bone list, the check fails or cannot run for every bone, a palette is shorter than the bone list, a parent joint is singular in some frame (bone scaled to 0, the child's local matrix is then undefined), or a local matrix has shear (TRS error > 1e-3). Log: `skin N: bone hierarchy, ...` or `skin N: flat joints (reason)`.
 - In hierarchy mode a joint that does not move in its own local space gets no channel (it follows its parent). The shear helper and the IBM Q fix do not run (the local matrices are checked to be TRS).
-- Offline test (fake rig: 6 palette bones in shuffled order, a non-palette helper bone between two bones, rotated and scaled T, non-uniform scale on a leaf): parents and names right, chain of locals * IBM equals the palette (error 7e-16), local TRS error 6e-8, bind pose equals boneWorld at bind. A reversed bone list fails the check; a zero-scaled parent gives the fallback.
-- Test needed in the browser: Simple rigged character (Static Pose and RECORD ALL CLIPS), the girl model (shear, zero-scaled parts), Blu; then Blender import and clearing the pose.
+- Offline test (fake rig: 6 palette bones in shuffled order, a non-palette helper bone between two bones, rotated and scaled T, non-uniform scale on a leaf): parents and names right, chain of locals * IBM equals the palette (error 7e-16), local TRS error 6e-8, bind pose equals boneWorld at bind. A reversed bone list fails the check, a zero-scaled parent gives the fallback.
+- Test needed in the browser: Simple rigged character (Static Pose and RECORD ALL CLIPS), the girl model (shear, zero-scaled parts), Blu, then Blender import and clearing the pose.
 
 ## Round 24: FBX export and progress bars (v1.5.0)
 
-- FBX is converted from the finished glTF (`FbxWriter.gltfToFbx(gltf, bin, opts)`), so GLB and FBX share all capture code. Binary FBX 7.4: node records with 32-bit offsets, a 13-byte null record after nested lists (always for AnimationStack and AnimationLayer), SDK-style footer. Arrays of 1 KB or more are zlib-compressed (encoding 1) with `CompressionStream('deflate')`; without it the file is written uncompressed.
+- FBX is converted from the finished glTF (`FbxWriter.gltfToFbx(gltf, bin, opts)`), so GLB and FBX share all capture code. Binary FBX 7.4: node records with 32-bit offsets, a 13-byte null record after nested lists (always for AnimationStack and AnimationLayer), SDK-style footer. Arrays of 1 KB or more are zlib-compressed (encoding 1) with `CompressionStream('deflate')`, without it the file is written uncompressed.
 - Axes and units: GlobalSettings Y up, front +Z, X right, UnitScaleFactor 100 (meters), so the glTF coordinates go in unchanged.
 - Nodes become Model objects (LimbNode for skin joints, Mesh, Null), with Lcl Translation/Rotation (Euler XYZ in degrees, R = Rz*Ry*Rx)/Scaling and InheritType 1 (plain matrix product). A node matrix with shear keeps only its TRS part (warning).
-- Geometry: control points = glTF vertices (no merge), so vertex order matches the GLB. Normals ByPolygonVertex/Direct, UVs and colors ByPolygonVertex/IndexToDirect with the vertex index, V flipped (1 - v). Vertex colors are written sRGB (glTF COLOR_0 is linear; FBX apps read sRGB). Multi-primitive meshes are merged with a ByPolygon material layer.
-- Skin: the glTF IBMs carry the viewer's skeleton-to-geometry matrix T (non-uniform scale). With the mesh model world C as the bind matrix the bone binds M*inv(IBM) got that scale and Blender's rest bones were wrong. Fix: bind matrix M = W_rest(root joint) * IBM_root; then TransformLink_j = M * inv(IBM_j) is clean (T cancels), Transform_j = inv(TransformLink_j) * C, and K = inv(C) * M is baked into the vertices (normals and morph normal deltas by the inverse transpose). TransformAssociateModel and a BindPose entry give the armature node (nearest non-joint ancestor of the joints): Blender binds the mesh against it.
+- Geometry: control points = glTF vertices (no merge), so vertex order matches the GLB. Normals ByPolygonVertex/Direct, UVs and colors ByPolygonVertex/IndexToDirect with the vertex index, V flipped (1 - v). Vertex colors are written sRGB (glTF COLOR_0 is linear, FBX apps read sRGB). Multi-primitive meshes are merged with a ByPolygon material layer.
+- Skin: the glTF IBMs carry the viewer's skeleton-to-geometry matrix T (non-uniform scale). With the mesh model world C as the bind matrix the bone binds M*inv(IBM) got that scale and Blender's rest bones were wrong. Fix: bind matrix M = W_rest(root joint) * IBM_root, then TransformLink_j = M * inv(IBM_j) is clean (T cancels), Transform_j = inv(TransformLink_j) * C, and K = inv(C) * M is baked into the vertices (normals and morph normal deltas by the inverse transpose). TransformAssociateModel and a BindPose entry give the armature node (nearest non-joint ancestor of the joints): Blender binds the mesh against it.
 - Animation: one AnimationStack + BaseLayer per clip, curves with linear keys, times in KTime (46186158000 per second). Rotation keys are quaternions in glTF: they are turned into Euler keys (closest equivalent to the previous key), and a segment is split until linear Euler stays within 0.05 degrees of the slerp and no piece turns more than 12 degrees (apps that lerp quaternion keys drift on long arcs). Every clip keys every node path that any clip animates (constant rest value when the clip does not move it), so switching clips never keeps the previous clip's pose.
 - Morph targets: BlendShape deformer + one BlendShapeChannel and Shape geometry per target (only changed vertices), DeformPercent = weight * 100, animated with a DeformPercent curve.
 - Materials: DiffuseColor, Emissive (EmissiveFactor = strength when there is an emissive texture), Shininess/ShininessExponent from roughness, ReflectionFactor = metalness, Opacity/TransparencyFactor for BLEND and MASK. Textures: DiffuseColor, TransparentColor (BLEND/MASK), NormalMap, EmissiveColor. The packed metal/rough image is split into grayscale `*_roughness.png` (G, linked to ShininessExponent, Blender reads it as roughness) and `*_metallic.png` (B, ReflectionFactor) at export (canvas). Videos reference `textures/<name>` relative to the FBX.
-- Tested (tools/fbx): Blender 5.2 FBX import vs a numpy reference from the GLB. Simple rigged character, 18 clips: rest 1e-6, 17 clips <= 2.4e-5 of the scene size, ClimbA 2.7e-3 at one instant (134 degree jump between two source keys). Light ball (2 morphs, node animation, vertex colors): 4e-8, colors exact. Warehouse (49 meshes, 39 materials, 27 textures): vertices and UVs exact, materials the same except Blender's Dithered blend mode. Assimp and ufbx load the three files without warnings; ufbx rest/bind pose matches (5e-16). The browser path (CompressionStream, canvas split) was run in Chromium and gave the same results. Warehouse FBX 20.5 MB (GLB 38.6 MB).
-- UI: stage bar + sub-stage bar (`progStage`, `progSub`, `progDone`). Export stages: textures, merging, building scene (striped bar: synchronous), writing FBX (the converter yields every 40 ms so the bar repaints), splitting maps, ZIP (JSZip onUpdate). Recording: clip k of n and the time in the clip. New panel CSS (`#ripper-style`): download blue, record red, disabled grey. RECORD is RECORD SINGLE CLIP and is disabled with no clips; downloads are disabled while recording or exporting.
-- Sub-stage progress: `waitForTextures(onProg)` reports captured/expected and the seconds left; `mergeMRTextures(onJob, forcePng)` and `mergeOpacityTextures(onJob)` report each finished material (first half of the bar MR, second half opacity).
+- Tested (tools/fbx): Blender 5.2 FBX import vs a numpy reference from the GLB. Simple rigged character, 18 clips: rest 1e-6, 17 clips <= 2.4e-5 of the scene size, ClimbA 2.7e-3 at one instant (134 degree jump between two source keys). Light ball (2 morphs, node animation, vertex colors): 4e-8, colors exact. Warehouse (49 meshes, 39 materials, 27 textures): vertices and UVs exact, materials the same except Blender's Dithered blend mode. Assimp and ufbx load the three files without warnings, ufbx rest/bind pose matches (5e-16). The browser path (CompressionStream, canvas split) was run in Chromium and gave the same results. Warehouse FBX 20.5 MB (GLB 38.6 MB).
+- UI: stage bar + sub-stage bar (`progStage`, `progSub`, `progDone`). Export stages: textures, merging, building scene (striped bar: synchronous), writing FBX (the converter yields every 40 ms so the bar repaints), splitting maps, ZIP (JSZip onUpdate). Recording: clip k of n and the time in the clip. New panel CSS (`#ripper-style`): download blue, record red, disabled grey. RECORD is RECORD SINGLE CLIP and is disabled with no clips, downloads are disabled while recording or exporting.
+- Sub-stage progress: `waitForTextures(onProg)` reports captured/expected and the seconds left, `mergeMRTextures(onJob, forcePng)` and `mergeOpacityTextures(onJob)` report each finished material (first half of the bar MR, second half opacity).
 - FBX still runs the MR merge: it normalizes the sources (glossiness inverted to roughness, missing maps filled) into one image, which the FBX step splits again. For FBX the merge is PNG, so the split maps have no JPEG loss, and the packed image is left out of the zip.
 - Test needed in the browser: GLB and FBX download on the three models, progress bars during RECORD ALL CLIPS and FBX export, then Blender import of the FBX.
 
 
 ## Round 25: code review and cleanup (branch review-cleanup)
 
-- Two independent reviews (a fresh Claude with no history, and Gemini) gave the findings R1-R21 and G1-G3. Each finding was checked against the code before a change; documented workarounds were kept.
-- Bugs fixed: a RECORD ALL that kept one clip exported no animation (export used `window.clips` only when it held 2 or more); the panel could not be dragged after a language change; a cancelled RECORD ALL showed success (the flag was cleared before it was read); an export in a hidden tab stopped at `nextPaint` (rAF does not fire); FBX vertex colours were sRGB-encoded twice with "Vertex color sRGB>linear" off (the GLB now says `asset.extras.vertexColorSpace: "srgb"`).
-- Playback speed: `getSimulationTime()` runs at wall speed, the x0.1-x2 setting is `getTimeFactor()`, and a speed change rescales the clock; clip time = simulation time x speed (probes `tools/probe-playback-speed.js`, `tools/probe-speed-change.js`). The stall stop needs 3 s without clip-time progress.
+- Two independent reviews (a fresh Claude with no history, and Gemini) gave the findings R1-R21 and G1-G3. Each finding was checked against the code before a change, documented workarounds were kept.
+- Bugs fixed: a RECORD ALL that kept one clip exported no animation (export used `window.clips` only when it held 2 or more), the panel could not be dragged after a language change, a cancelled RECORD ALL showed success (the flag was cleared before it was read), an export in a hidden tab stopped at `nextPaint` (rAF does not fire), FBX vertex colours were sRGB-encoded twice with "Vertex color sRGB>linear" off (the GLB now says `asset.extras.vertexColorSpace: "srgb"`).
+- Playback speed: `getSimulationTime()` runs at wall speed, the x0.1-x2 setting is `getTimeFactor()`, and a speed change rescales the clock, clip time = simulation time x speed (probes `tools/probe-playback-speed.js`, `tools/probe-speed-change.js`). The stall stop needs 3 s without clip-time progress.
 - Untextured specular/gloss materials: the flat colour is in `DiffusePBR` (or `DiffuseColor`), not only `AlbedoPBR` (warehouse lamps were white).
-- Diagnostics: missing viewer patches are listed 12 s after load (`all viewer patches applied` otherwise); a sentinel appended to the patched bundle reports when it did not run (CSP, throw); export start logs one `viewer: ...` line of the private fields found.
-- Structure: sections reordered (code moved, not changed; see CONTRIBUTING), `_downloadGLBSync` split into helpers (primitiveTriangles, vertexColorAccessor, morphTargetAccessors, buildTexturePool, finishMaterials, collectClipSets, pruneUnusedTextures, packGlb), settings rows built by `settingRow`/`checkSetting`/`selectSetting` with one stylesheet.
+- Diagnostics: missing viewer patches are listed 12 s after load (`all viewer patches applied` otherwise), a sentinel appended to the patched bundle reports when it did not run (CSP, throw), export start logs one `viewer: ...` line of the private fields found.
+- Structure: sections reordered (code moved, not changed, see CONTRIBUTING), `_downloadGLBSync` split into helpers (primitiveTriangles, vertexColorAccessor, morphTargetAccessors, buildTexturePool, finishMaterials, collectClipSets, pruneUnusedTextures, packGlb), settings rows built by `settingRow`/`checkSetting`/`selectSetting` with one stylesheet.
 - Test method for the refactor: a mock osgjs scene (skinned mesh with a readable rig, skinned mesh without a bone list and with shear and a show/hide-by-scale joint, strip with restart index and a bridging sliver, wireframe overlay, morph targets, MR and opacity merges, flat materials, two clips and a Static Pose snapshot) goes through the real hooks and the export. GLB and FBX outputs and the log lines were byte-identical before and after every refactor step, in four setting combinations. The settings form was compared pixel by pixel in three languages.
 
 ## Round 26: FBX opacity factor, strip bridges, strip holes
 
 Found on a helicopter model (DC News helicopter) that is no longer on Sketchfab, so it cannot be used for new tests. The exports from it are not in the repository.
 
-- Rotor blur material: opaque RGBA texture + opacity factor 0.05 (`baseColorFactor[3]`, BLEND). glTF multiplies them; Blender's FBX importer sets alpha = 1 - TransparencyFactor but then links the alpha socket to the TransparentColor texture, and also to the diffuse image whenever it is 32-bit, so the factor is lost. FbxWriter now emits a split `{ channel: 'A', alpha }` and links the copy `<image>_a<percent>.png` (alpha x factor) as DiffuseColor and TransparentColor, with Opacity 1. Checked in Blender 5.2: alpha image `Heli_RotorBlur_a5.png`, pixel alpha 0.051.
-- Rotor stripe: one strip holds both rotor discs; the strip jumps from the tail disc (vertices 199/200) to the main disc (400/401) with two thin triangles of 16x the typical edge. The 20x length gate never looked at them (the disc spokes are longer). New second test for strip triangles longer than 4x the typical edge with height < 3% of their length: dropped only when an open long edge joins two parts that no other triangle connects (union-find over welded vertices, without the thin triangles). Fans and shard edges stay in one part; tubes share their long edges. On the helicopter, warehouse, character and ball meshes (every triangle fed as its own strip) the only change is the 2 rotor bridges per rotor mesh.
+- Rotor blur material: opaque RGBA texture + opacity factor 0.05 (`baseColorFactor[3]`, BLEND). glTF multiplies them, Blender's FBX importer sets alpha = 1 - TransparencyFactor but then links the alpha socket to the TransparentColor texture, and also to the diffuse image whenever it is 32-bit, so the factor is lost. FbxWriter now emits a split `{ channel: 'A', alpha }` and links the copy `<image>_a<percent>.png` (alpha x factor) as DiffuseColor and TransparentColor, with Opacity 1. Checked in Blender 5.2: alpha image `Heli_RotorBlur_a5.png`, pixel alpha 0.051.
+- Rotor stripe: one strip holds both rotor discs, the strip jumps from the tail disc (vertices 199/200) to the main disc (400/401) with two thin triangles of 16x the typical edge. The 20x length gate never looked at them (the disc spokes are longer). New second test for strip triangles longer than 4x the typical edge with height < 3% of their length: dropped only when an open long edge joins two parts that no other triangle connects (union-find over welded vertices, without the thin triangles). Fans and shard edges stay in one part, tubes share their long edges. On the helicopter, warehouse, character and ball meshes (every triangle fed as its own strip) the only change is the 2 rotor bridges per rotor mesh.
 - The two rotor meshes (`RotorBlades_Tail`, `RotorBlades_Top`) hold the same geometry (both discs, same index buffers), so each disc is drawn twice, as in the viewer.
-- Tail holes (same model, older bug): the tail mesh is a strip (17095 indices) plus a triangle list (1836). 8 long thin strip triangles share one long edge each with a triangle of the list; the open-edge test counted edges inside the strip only, saw an open edge and dropped them (8 slit holes, 45 units long). `primitiveTriangles(..., others)` now gets the other primitives' triangles (`stripTrianglesPlain`, no filter) for edge counts, "on real geometry" and the part connectivity. Check: GLB strip + the 8 re-added triangles + the list as others: old filter drops 8, new drops 0; rotor bridges still dropped; mock exports unchanged.
+- Tail holes (same model, older bug): the tail mesh is a strip (17095 indices) plus a triangle list (1836). 8 long thin strip triangles share one long edge each with a triangle of the list, the open-edge test counted edges inside the strip only, saw an open edge and dropped them (8 slit holes, 45 units long). `primitiveTriangles(..., others)` now gets the other primitives' triangles (`stripTrianglesPlain`, no filter) for edge counts, "on real geometry" and the part connectivity. Check: GLB strip + the 8 re-added triangles + the list as others: old filter drops 8, new drops 0, rotor bridges still dropped, mock exports unchanged.
 
 ## Round 27: unnamed meshes (issue #3, "#18 Anatomy")
 
 - Symptom: model on screen, panel "meshes: 0", empty export. All five patches applied.
 - `tools/probe-mesh-capture.js` (drag the model while it runs: the viewer draws nothing while idle) showed three meshes reaching attachbody: the tooth (no `_name`, no stateset, parent unnamed, grandparent "Scene - RootModel", 16056 vertices), a 4-vertex quad under "Hotspot - Proxy", and "composer layer".
 - Cause: attachbody's first filter, from the original v0.9 script, dropped every mesh with no own, stateset or parent name. It kept the viewer's helpers out, but also a model uploaded as one unnamed mesh.
-- Fix: an unnamed mesh is kept when "Scene - RootModel" is among its ancestors (the uploaded model's root; the viewer's Feature nodes sit above it, the hotspot proxy is beside it). Others are marked `_ripSkip` and logged once. Named meshes are handled as before. Exported name: `mesh_<index>`; with no stateset, the material gets the mesh name and default values.
+- Fix: an unnamed mesh is kept when "Scene - RootModel" is among its ancestors (the uploaded model's root, the viewer's Feature nodes sit above it, the hotspot proxy is beside it). Others are marked `_ripSkip` and logged once. Named meshes are handled as before. Exported name: `mesh_<index>`, with no stateset, the material gets the mesh name and default values.
 - The "Failed to fetch" errors in the report come from the viewer itself (blocked analytics such as sentry.io and awswaf telemetry), not from the script.
 
 ## Round 28: matcap colour, texture wait, small screens, annotations
 
 - #18 Anatomy has one material channel with a texture: Matcap. The texture wait counted it (and the colour atlas), although the export skips both, so the export waited the full timeout. `textureReadiness` now skips Matcap, Inspector and atlas entries, like the builder.
 - Matcap shading takes the colour from the matcap image, so the material's base colour (white on #18) is not what the viewer shows. For a matcap-only material the export uses the mean colour of the inner half of the matcap sphere (64x64 canvas sample, sRGB to linear, times the Matcap tint). #18: linear 0.827, 0.611, 0.577. The matcap image is readable from the viewer frame (media.sketchfab.com allows it).
-- Panel: max-height = window height below the panel top; the settings list scrolls first (`flex-shrink:1`, `overflow-y:auto`); the panel moves up when the settings open near the bottom; the title cannot leave the window while dragged.
+- Panel: max-height = window height below the panel top, the settings list scrolls first (`flex-shrink:1`, `overflow-y:auto`), the panel moves up when the settings open near the bottom, the title cannot leave the window while dragged.
 - Annotations come from `/i/models/<uid>/hotspots` (the viewer bundle: `getAnnotations`), not from the scene: `{ results: [{ uid, name, content: { raw, rendered }, images, eye, target, position }] }`. The page holds no copy, and the scene only has the marker quads ("Hotspot - Proxy", outside the model root). `position`, `eye` and `target` are in the space under "Scene - RootModel": its world matrix maps the API position onto the marker with error 0 (probe-annotation-space.js on #18). The meshes are exported in the same world space, so the annotation empties get W(RootModel) * position.
 
 ## Round 29: split into loose parts (issue #3, teeth)
 
-- "(Dentistry) Human Teeth - Permanent Dentition" exports as 9 meshes of up to 65,531 vertices. The viewer merged the 32 teeth (one material) into one geometry and cut it for the WebGL 1 index limit; 25,804 positions sit on both sides of a cut. Object names are not in the viewer data.
+- "(Dentistry) Human Teeth - Permanent Dentition" exports as 9 meshes of up to 65,531 vertices. The viewer merged the 32 teeth (one material) into one geometry and cut it for the WebGL 1 index limit, 25,804 positions sit on both sides of a cut. Object names are not in the viewer data.
 - Joining the 9 pieces and connecting triangles through exactly equal positions (float bits) gives exactly 32 parts, in pairs of equal size (left and right teeth). Rounding the positions to 1e-5 joins everything into 1 part (the teeth touch), so only exact equality works.
-- `splitLooseParts` runs on the finished glTF (GLB and FBX both use it): groups by parent node, transform, material content (name ignored, each piece has its own material copy) and attribute layout; skips skinned, morphed, animated, instanced and non-triangle meshes, and groups with more than 2000 parts (dust, scans). Vertices with all attributes equal are merged, which closes the cut seams (566,390 -> 533,833 vertices on the teeth). `compactGltf` drops the old accessors, buffer views, meshes and materials. Teeth: 1,067,534 triangles kept, glTF validator 0 errors, 0 warnings, 2.4 s in Node.
+- `splitLooseParts` runs on the finished glTF (GLB and FBX both use it): groups by parent node, transform, material content (name ignored, each piece has its own material copy) and attribute layout, skips skinned, morphed, animated, instanced and non-triangle meshes, and groups with more than 2000 parts (dust, scans). Vertices with all attributes equal are merged, which closes the cut seams (566,390 -> 533,833 vertices on the teeth). `compactGltf` drops the old accessors, buffer views, meshes and materials. Teeth: 1,067,534 triangles kept, glTF validator 0 errors, 0 warnings, 2.4 s in Node.
 - The strip slivers are not from these cuts: the pieces are triangle lists. The slivers come from bridge triangles in triangle strips.
 
 ## Round 30: textures without a protection key (issue #5)
 
-- Oscars Academy Dolby Theater: 3 of 13 textures were never captured (TextureArch.png, TextureArch NRM.png, BalconPeople.png). probe-texture-catalog.js: these 3 are the only textures whose images have no `pk`; the 10 captured ones all load a keyed image.
+- Oscars Academy Dolby Theater: 3 of 13 textures were never captured (TextureArch.png, TextureArch NRM.png, BalconPeople.png). probe-texture-catalog.js: these 3 are the only textures whose images have no `pk`, the 10 captured ones all load a keyed image.
 - The readback (drawhookimg) sits in the viewer's renderInto pass, which rebuilds keyed images on the GPU. An image without a key is uploaded as it is, so renderInto (and the capture) never runs.
 - Fix: drawhookcanvas keeps the texture's image list and the viewer's chosen image. When the chosen image has no key (and the lists carry the `pk` field at all), `fetchPlainTexture` downloads the largest unkeyed image (original file first at equal size) and registers it like a readback. The export also starts any missing downloads before the texture wait. Keyed images are never downloaded: they stay on the readback path.
-- OscarBill (the statue cards): `Opacity{enable:true, factor:1, type:additive}`, no opacity image, black background in the colour image. The viewer adds the colour, so black disappears. The export now writes `<mesh>_Alpha.png` with alpha = brightest channel x factor (black clear, gold solid) and sets BLEND; a flat colour with additive opacity gets alpha = brightest channel of the colour. Other Opacity types are unchanged.
+- OscarBill (the statue cards): `Opacity{enable:true, factor:1, type:additive}`, no opacity image, black background in the colour image. The viewer adds the colour, so black disappears. The export now writes `<mesh>_Alpha.png` with alpha = brightest channel x factor (black clear, gold solid) and sets BLEND, a flat colour with additive opacity gets alpha = brightest channel of the colour. Other Opacity types are unchanged.
 
+## Round 31: centre at origin (v1.7.4, issue #3, teeth)
+
+- Many models sit far from the origin in the viewer's scene, the teeth came out about 6.35 cm above it. `centreScene` runs on the finished glTF, after the split pass. Bounds: the 8 corners of each POSITION accessor's min/max through the node world matrices (rest pose).
+- Offset: X and Z centre to 0, lowest point to Y = 0, after the Y-up turn and the export scale.
+- First version put the offset on scene_root: Blender then shows scene_root's pivot below the model. Second version put it into scene_root's children: the pivot of `mesh_0` (parent of the split parts) was then off the model.
+- Final: static models (no skins, no animations, no mesh used by 2 nodes, float VEC3 positions with one user each) get the offset baked into the vertex positions, converted to each mesh node's local space, min/max are updated with `Math.fround`. Every node keeps its transform, so all pivots stay at the floor centre. Empty leaf nodes (annotation points) get the offset in their translation. Other models get it on scene_root's children, or on a new `centre_offset` node if a child has an animated translation.
+- Tests: plain, split and annotation exports, GLB and FBX, glTF validator 0 errors, 0 warnings. Teeth confirmed in Blender.
