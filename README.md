@@ -34,7 +34,7 @@ Sketchfab Ripper is a userscript for Tampermonkey. It exports the model that the
 - A desktop browser, for example Chrome, Brave, Edge or Firefox.
 - [Tampermonkey](https://www.tampermonkey.net/) or a compatible userscript manager.
 
-Tested with Tampermonkey (Chrome) and Violentmonkey (Firefox). The script must run in the page itself, not in an isolated sandbox. Greasemonkey 4 runs scripts only in a sandbox, so the script does not work with it.
+Tested with Tampermonkey (Chrome) and Violentmonkey (Firefox). The script must run in the page itself, not in an isolated sandbox. Greasemonkey 4 runs scripts only in a sandbox, so the script does not work with it. In Chrome and other Chromium browsers, also turn on **Allow User Scripts** for Tampermonkey (Extensions > Tampermonkey > Details). Without it, the panel does not show.
 
 ## Install
 
@@ -62,7 +62,7 @@ If the install page does not open:
 3. If the model has animation, do one of these steps:
    - To record the active clip, click **RECORD SINGLE CLIP**. The script records one full loop and stops.
    - To record all clips, click **RECORD ALL CLIPS**.
-4. Wait until the recording stops. The progress bars show the clip and the time in the clip.
+4. Wait until the recording stops. The progress bars show how far it is.
 5. Under **Download**, click **GLB** or **FBX**.
 
 The download is a zip file. It contains the GLB or FBX file and a `textures` folder.
@@ -75,7 +75,7 @@ If you do not record, the export contains the model in its current pose.
 
 ## Settings
 
-Click the gear icon in the panel. The script keeps your settings for the next visit. Hold the pointer on a setting name to see what it does.
+Click the gear icon in the panel. Settings are saved between visits. Hover over a setting name to see what it does.
 
 ![The panel before and after the UI update: separate GLB and FBX buttons, grouped sections, and a scrollable settings list](docs/images/ui-update.png)
 
@@ -88,11 +88,11 @@ Click the gear icon in the panel. The script keeps your settings for the next vi
 | Double sided | On | Marks materials as double-sided, as in the viewer. |
 | Auto single sided (viewer flag) | On | Keeps a material single-sided if the viewer shows it single-sided. |
 | Drop strip slivers (stripes) | On | Removes long thin triangles that connect separate parts. |
-| Reduce keyframes | On | Leaves out animation keys that the keys before and after them already give. The file gets about half as large. Turn it off if an animation looks wrong. |
+| Reduce keyframes | On | Leaves out animation keys that interpolation between the neighboring keys already reproduces. Files get about half as large. Turn it off if an animation looks wrong. |
 | Keep still clips | Off | A clip in which no joint moves (a pose clip) becomes a pose of the skeleton, with two equal keys. Off: such clips are left out of the file. |
 | Export annotations | Off | Each annotation of the model becomes an empty object at its point, named after its title ("1. Title", in an `annotations` group). Its text and camera view (`eye`, `target`) are kept in the node's extras (custom properties in Blender). |
 | Split into loose parts | Off | The viewer merges objects that share a material and cuts them into pieces of at most 65,535 vertices, so one object can be spread over two meshes. On: the pieces are joined again, and every connected part becomes its own object (for example each tooth of a dental model). Animated meshes and meshes with shape keys are left as they are. Original object names are not in the viewer, so the parts are named `mesh_0_part_01`, `mesh_0_part_02`, and so on. |
-| Centre at origin | Off | Many models sit far from the origin in Sketchfab's scene (the viewer frames the camera on them). On: the whole model is moved so the centre of its bounding box is at the origin and its lowest point at height 0, after the export scale. Annotations move with it. |
+| Centre at origin | Off | Many models sit far from the origin in Sketchfab's scene (the viewer frames the camera on them). On: the model is moved so the centre of its bounding box is at X = Z = 0 and its lowest point at Y = 0, after the export scale. For static models the object pivots stay at the origin, under the model. Annotations move with it. |
 | Vertex color sRGB>linear | On | Converts vertex colors to the color space that glTF uses. |
 | Flat metal/rough from viewer | On | Uses the metalness and roughness values of the viewer for materials without textures. |
 | Export scale | 1 | Multiplies the size of the model. Use 0.01 for a model in centimeters. |
@@ -126,20 +126,17 @@ A model that fails? Please [report it](#report-a-problem).
 
 ## Known limitations
 
-- The script gets a texture only when the viewer draws it. Wait until the model is fully visible before you export. On slow computers, some textures can be missing.
+- Most textures are downloaded directly. Protected textures are captured only when the viewer draws them, and the export waits up to 12 seconds for textures that are still loading. Wait until the model is fully visible before you export.
 - The export has no tangents. Viewers calculate them from the normal map.
 - If the panel does not show, reload the page.
 
 ## Report a problem
 
-If a model does not export correctly, [open an issue](../../issues/new/choose) and use the bug report form. The form asks for the model link, your settings, the steps and the console log. Without these data, the problem cannot be found.
+If a model does not export correctly, [open an issue](../../issues/new/choose) and use the bug report form. It asks for the model link, your settings, the steps and the console log. I need these to find the problem.
 
 For questions, use [Discussions](../../discussions). For code changes, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## For developers
-
-- [`docs/NOTES.md`](docs/NOTES.md) has the technical notes: how the viewer stores data, the decisions in the exporter and the test history.
-- [`tools/`](tools/) has read-only console probes. Paste a probe in the console of the viewer frame to examine a model.
+Technical notes are in [`docs/NOTES.md`](docs/NOTES.md): how the viewer stores data, the decisions in the exporter and the test history. [`tools/`](tools/) has read-only console probes. Paste one in the console of the viewer frame to examine a model.
 
 ## Credits
 
