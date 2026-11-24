@@ -36,7 +36,7 @@ Do not attach exported files, textures or screenshots of models that you do not 
 1. Fork the repository and make a branch from `main`.
 2. Make the change in `src/Sketchfab-ripper.user.js`.
 3. Obey the code rules below.
-4. Export at least one model that your change affects, and one model that it does not affect. Check both in the [glTF viewer](https://gltf-viewer.donmccurdy.com/) and with the [glTF validator](https://github.khronos.org/glTF-Validator/).
+4. Run the tests: see [`tests/README.md`](tests/README.md). For a new feature, add a test. Then export at least one model that your change affects, and one model that it does not affect. Check both in the [glTF viewer](https://gltf-viewer.donmccurdy.com/) and with the [glTF validator](https://github.khronos.org/glTF-Validator/).
 5. Open a pull request. Tell which models you tested, and paste the `[Ripper]` log lines that show the change.
 
 ### Code rules
