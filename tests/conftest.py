@@ -49,7 +49,7 @@ def browser():
 class Ripper:
     """One page with the userscript loaded. config: settings saved before the script starts."""
 
-    def __init__(self, browser, base_url, config=None, extra_stub='', path='/index.html', viewport=None):
+    def __init__(self, browser, base_url, config=None, extra_stub='', path=EMBED, viewport=None):
         self.base = base_url
         self.page = browser.new_page(viewport=viewport or {'width': 1100, 'height': 900})
         self.logs, self.requests = [], []

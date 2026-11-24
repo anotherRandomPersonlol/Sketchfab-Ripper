@@ -1,7 +1,7 @@
 """Export tests on mock viewer data. Run from the repo root: python -m pytest tests"""
 import json
 import pytest
-from conftest import EMBED, validate, world_bounds
+from conftest import validate, world_bounds
 
 I = '[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]'
 
@@ -194,7 +194,7 @@ HOTSPOTS = """window.__fetched=[]; const _f = window.fetch; window.fetch = (u, o
 
 @pytest.mark.parametrize('on', [True, False])
 def test_annotations(ripper, on):
-    r = ripper(config={'EXPORT_ANNOTATIONS': on}, extra_stub=HOTSPOTS, path=EMBED)
+    r = ripper(config={'EXPORT_ANNOTATIONS': on}, extra_stub=HOTSPOTS)
     r.scene(f"""() => {{ {MK}
       const rm = {{_name:'Scene - RootModel', matrix: I, _parents: [{{_name:'Feature - Orientation', matrix: I, _parents: []}}]}};
       window.attachbody(mk([0,0,0,1,0,0,0,1,0], [0,1,2], {{_name:null, matrix:I, _parents:[rm]}}, {{_name:'Body'}})); }}""")

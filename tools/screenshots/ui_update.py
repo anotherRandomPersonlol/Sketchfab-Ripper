@@ -34,7 +34,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory='tests/harness'))
 threading.Thread(target=srv.serve_forever, daemon=True).start()
-url = f'http://127.0.0.1:{srv.server_address[1]}/index.html'
+url = f'http://127.0.0.1:{srv.server_address[1]}/models/04457756416044c5af23f71849232428/embed/'   # a viewer frame URL
 
 launch = {'args': ['--no-sandbox']}
 if os.environ.get('CHROME_PATH'): launch['executable_path'] = os.environ['CHROME_PATH']
