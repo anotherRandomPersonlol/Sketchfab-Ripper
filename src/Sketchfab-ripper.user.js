@@ -40,6 +40,39 @@
     'use strict';
     const window = unsafeWindow;
 
+    // ====================================================================
+    // Page access check
+    // ====================================================================
+    // The script must run in the page (header: @inject-into page, @sandbox JavaScript). Some
+    // managers ignore that and run it in an isolated sandbox (in Firefox: Greasemonkey 4,
+    // FireMonkey, or a forced sandbox setting). The viewer code then cannot call the hooks
+    // ("Permission denied to access property") and no model loads. Probe: let the page call a
+    // function set from here. true = page can call it, false = sandbox, null = inline scripts
+    // blocked (the interceptor cannot work then either, and reports it).
+    // Runs once, on first use (the first viewer bundle or the panel): at document-start the
+    // page may not have an <html> element yet, and an inline script only runs in the document.
+    let _pageAccess;
+    function pageAccess() {
+        if (_pageAccess !== undefined) return _pageAccess;
+        const root = document.documentElement;
+        if (!root) return null;   // too early: unknown, ask again later
+        const attr = 'data-ripper-probe';
+        try {
+            window.__ripperProbe = () => 'ok';
+            const s = document.createElement('script');
+            s.__ripperOwn = true;
+            s.textContent = `try{document.documentElement.setAttribute('${attr}',window.__ripperProbe())}` +
+                `catch(e){document.documentElement.setAttribute('${attr}','denied')}`;
+            (document.head || root).appendChild(s);
+            s.remove();
+            const v = root.getAttribute(attr);
+            root.removeAttribute(attr);
+            try { delete window.__ripperProbe; } catch (e) { /* page property */ }
+            _pageAccess = v === 'ok' ? true : v === 'denied' ? false : null;
+        } catch (e) { _pageAccess = null; }
+        return _pageAccess;
+    }
+
     window.allmodel            = window.allmodel            || [];
     window.animationRecording  = false;
     window.recordedFrames      = [];
@@ -154,6 +187,7 @@
             st_line: '{state} · meshes: {m} · frames: {f} · clips: {c}',
             st_rec_clips: ' (recorded {n})',
             st_no_anchors: '⚠ not connected to the viewer — reload the page',
+            st_sandbox: "⚠ the userscript manager runs this script in a sandbox — use Violentmonkey or Tampermonkey",
             pr_recording: 'Recording {name}',
             pr_recording_manual: 'Recording (press STOP to end)',
             pr_seconds: '{t} / {d} s',
@@ -253,6 +287,7 @@
             st_line: '{state} · obiekty: {m} · klatki: {f} · klipy: {c}',
             st_rec_clips: ' (nagrano {n})',
             st_no_anchors: '⚠ brak połączenia z podglądem 3D — odśwież stronę',
+            st_sandbox: "⚠ menedżer skryptów uruchamia ten skrypt w piaskownicy — użyj Violentmonkey lub Tampermonkey",
             pr_recording: 'Nagrywanie: {name}',
             pr_recording_manual: 'Nagrywanie (naciśnij ZATRZYMAJ, aby zakończyć)',
             pr_seconds: '{t} / {d} s',
@@ -352,6 +387,7 @@
             st_line: '{state} · объекты: {m} · кадры: {f} · клипы: {c}',
             st_rec_clips: ' (записано {n})',
             st_no_anchors: '⚠ нет связи с 3D-просмотром — перезагрузите страницу',
+            st_sandbox: "⚠ менеджер скриптов запускает этот скрипт в песочнице — используйте Violentmonkey или Tampermonkey",
             pr_recording: 'Запись: {name}',
             pr_recording_manual: 'Запись (нажмите СТОП, чтобы закончить)',
             pr_seconds: '{t} / {d} с',
@@ -451,6 +487,7 @@
             st_line: '{state} · オブジェクト: {m} · フレーム: {f} · クリップ: {c}',
             st_rec_clips: ' (録画済み {n})',
             st_no_anchors: '⚠ 3Dビューアーに接続できません — ページを再読み込みしてください',
+            st_sandbox: "⚠ スクリプトマネージャーがこのスクリプトをサンドボックスで実行しています — Violentmonkey か Tampermonkey を使ってください",
             pr_recording: '録画中: {name}',
             pr_recording_manual: '録画中 (停止を押すと終了)',
             pr_seconds: '{t} / {d} 秒',
@@ -550,6 +587,7 @@
             st_line: '{state} · 오브젝트: {m} · 프레임: {f} · 클립: {c}',
             st_rec_clips: ' (녹화됨 {n})',
             st_no_anchors: '⚠ 3D 뷰어에 연결되지 않았습니다 — 페이지를 새로고침하세요',
+            st_sandbox: "⚠ 스크립트 관리자가 이 스크립트를 샌드박스에서 실행합니다 — Violentmonkey 또는 Tampermonkey를 사용하세요",
             pr_recording: '녹화 중: {name}',
             pr_recording_manual: '녹화 중 (끝내려면 정지를 누르세요)',
             pr_seconds: '{t} / {d}초',
@@ -649,6 +687,7 @@
             st_line: '{state} · objetos: {m} · fotogramas: {f} · clips: {c}',
             st_rec_clips: ' (grabados {n})',
             st_no_anchors: '⚠ sin conexión con el visor 3D — recarga la página',
+            st_sandbox: "⚠ el gestor de scripts ejecuta este script en un sandbox — usa Violentmonkey o Tampermonkey",
             pr_recording: 'Grabando {name}',
             pr_recording_manual: 'Grabando (pulsa DETENER para terminar)',
             pr_seconds: '{t} / {d} s',
@@ -748,6 +787,7 @@
             st_line: '{state} · objetos: {m} · quadros: {f} · clipes: {c}',
             st_rec_clips: ' (gravados {n})',
             st_no_anchors: '⚠ sem conexão com o visualizador 3D — recarregue a página',
+            st_sandbox: "⚠ o gerenciador de scripts executa este script em um sandbox — use o Violentmonkey ou o Tampermonkey",
             pr_recording: 'Gravando {name}',
             pr_recording_manual: 'Gravando (clique em PARAR para terminar)',
             pr_seconds: '{t} / {d} s',
@@ -847,6 +887,7 @@
             st_line: '{state} · Objekte: {m} · Frames: {f} · Clips: {c}',
             st_rec_clips: ' ({n} aufgenommen)',
             st_no_anchors: '⚠ keine Verbindung zur 3D-Ansicht — Seite neu laden',
+            st_sandbox: "⚠ der Skript-Manager führt dieses Skript in einer Sandbox aus — Violentmonkey oder Tampermonkey verwenden",
             pr_recording: 'Aufnahme: {name}',
             pr_recording_manual: 'Aufnahme (STOPP drücken zum Beenden)',
             pr_seconds: '{t} / {d} s',
@@ -946,6 +987,7 @@
             st_line: '{state} · objets : {m} · images : {f} · clips : {c}',
             st_rec_clips: ' ({n} enregistrés)',
             st_no_anchors: '⚠ pas de connexion à la visionneuse 3D — rechargez la page',
+            st_sandbox: "⚠ le gestionnaire de scripts exécute ce script dans un bac à sable — utilisez Violentmonkey ou Tampermonkey",
             pr_recording: 'Enregistrement : {name}',
             pr_recording_manual: 'Enregistrement (appuyez sur ARRÊTER pour finir)',
             pr_seconds: '{t} / {d} s',
@@ -1045,6 +1087,7 @@
             st_line: "{state} · 网格：{m} · 帧：{f} · 片段：{c}",
             st_rec_clips: "（已录制 {n}）",
             st_no_anchors: "⚠ 未连接到 3D 查看器 — 请刷新页面",
+            st_sandbox: "⚠ 脚本管理器在沙盒中运行此脚本 — 请使用 Violentmonkey 或 Tampermonkey",
             pr_recording: "正在录制 {name}",
             pr_recording_manual: "正在录制（按“停止”结束）",
             pr_seconds: "{t} / {d} 秒",
@@ -5389,8 +5432,15 @@
 
         // Warn if the bad bundle was served. After 8s, show hint. After
         // 12s, auto-reload once (guarded by sessionStorage so we don't loop).
+        if (pageAccess() === false) {
+            const s = document.getElementById('ripper-status');
+            if (s) { s.textContent = i18n('st_sandbox'); s.style.color = '#f55'; }
+            err('the userscript manager runs this script in an isolated sandbox, so it cannot connect to the viewer. ' +
+                'The viewer was left unpatched. Use Violentmonkey or Tampermonkey (they run it in the page), ' +
+                'or turn off a forced sandbox setting in your manager.');
+        }
         setTimeout(() => {
-            if (window._anyAnchorsMatched) return;
+            if (window._anyAnchorsMatched || pageAccess() === false) return;
             const s = document.getElementById('ripper-status');
             if (s) {
                 s.textContent = i18n('st_no_anchors');
@@ -5400,6 +5450,7 @@
         }, 8000);
 
         setTimeout(() => {
+            if (pageAccess() === false) return;   // sandbox: nothing was patched on purpose, a reload does not help
             reportMissingPatches();   // anchors matched, but maybe not all five patches
             if (window._anyAnchorsMatched) return;
             let already;
@@ -5413,7 +5464,7 @@
 
         setInterval(() => {
             const s = document.getElementById('ripper-status');
-            if (!s) return;
+            if (!s || pageAccess() === false) return;   // keep the sandbox message
             if (!window._anyAnchorsMatched && s.textContent === i18n('st_no_anchors')) return;
             const busy = window.animationRecording || window.clipRecording;
             const state = window.animationRecording ? i18n('st_rec') : (window.clipRecording ? i18n('st_clips', { p: window.clipProgress }) : i18n('st_idle'));
@@ -6561,6 +6612,7 @@
         if (node.__ripperOwn) return;
         const src = node.src || '';
         if (src.indexOf('web/dist/') < 0 && src.indexOf('standaloneViewer') < 0) return;
+        if (pageAccess() === false) return;   // sandbox: leave the viewer as it is (see Page access check)
         if (patchedSrc[src]) { warn('bundle already patched, dropping duplicate:', src.split('/').pop()); e.preventDefault(); return; }
         patchedSrc[src] = true;
 
@@ -6612,13 +6664,12 @@
         // script runs during appendChild, so it can be checked right after. If the
         // page blocks inline scripts (CSP) or the bundle throws, it stays unset.
         const runKey = src.split('/').pop();
-        window.__ripperRan = window.__ripperRan || {};
         const s = document.createElement('script');
         s.__ripperOwn = true;
         s.type = 'text/javascript';
-        s.text = js + `\n;window.__ripperRan[${JSON.stringify(runKey)}]=1;`;
+        s.text = js + `\n;(window.__ripperRan=window.__ripperRan||{})[${JSON.stringify(runKey)}]=1;`;
         (document.head || document.getElementsByTagName('head')[0]).appendChild(s);
-        if (!window.__ripperRan[runKey]) {
+        if (!(window.__ripperRan && window.__ripperRan[runKey])) {
             err(`patched bundle did not run to the end: ${runKey}. The page may block inline scripts (CSP), or the bundle threw (see the error above). The viewer may not load.`);
         }
     };

@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Node packages for the tests: JSZip (read the exported zip in the page) and the Khronos glTF validator.",
+  "dependencies": {
+    "gltf-validator": "^2.0.0-dev.3.10",
+    "jszip": "^3.10.1"
+  }
+}

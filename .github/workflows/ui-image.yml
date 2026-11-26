@@ -1,0 +1,67 @@
+# Rebuilds docs/images/ui-update.png from the code when the script changes on main,
+# and commits it only if the image changed. Greasy Fork shows the image from its raw
+# GitHub URL and refreshes its copy about once a day.
+# Run it by hand with Actions > UI image > Run workflow.
+name: UI image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/Sketchfab-ripper.user.js
+      - tools/screenshots/**
+      - tests/harness/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ui-image
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the old panel is rendered from the v1.4.0 tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright and fonts
+        run: |
+          pip install playwright pillow
+          python -m playwright install --with-deps chromium
+          sudo apt-get install -y fonts-inter fonts-dejavu-core
+          # The panel uses system-ui / sans-serif / monospace. Pin them, so the image does not
+          # change when the runner's default fonts change.
+          mkdir -p ~/.config/fontconfig
+          cat > ~/.config/fontconfig/fonts.conf <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <alias binding="strong"><family>system-ui</family><prefer><family>Inter</family></prefer></alias>
+            <alias binding="strong"><family>sans-serif</family><prefer><family>Inter</family></prefer></alias>
+            <alias binding="strong"><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>
+          </fontconfig>
+          EOF
+          fc-cache -f >/dev/null
+
+      - name: Render the image
+        run: python tools/screenshots/ui_update.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- docs/images/ui-update.png; then
+            echo "Image unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/images/ui-update.png
+          git commit -m "Update UI image (generated)"
+          git push
