@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.7.5
 
 ### Fixed
 - **Viewer stuck on "Loading 3D model" when the userscript manager runs the script in a sandbox** (seen in Firefox). Some managers ignore the header's request to run in the page (`@inject-into page`, `@sandbox JavaScript`). The viewer code then cannot call the script's hooks ("Permission denied to access property") and no model loads. The script now checks this on the first viewer bundle: in a sandbox it leaves the viewer unpatched, so models load normally, and the panel says to use Violentmonkey or Tampermonkey.
