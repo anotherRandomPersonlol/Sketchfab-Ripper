@@ -233,3 +233,21 @@ def test_panel_fits_small_window(ripper):
         return { top: p.top, bottom: p.bottom, vh: innerHeight, scrolls: c.scrollHeight > c.clientHeight }; }""")
     assert geo['top'] >= 0 and geo['bottom'] <= geo['vh'], geo
     assert geo['scrolls'], geo
+
+
+# ====================================================================
+# Sandboxed userscript manager (Firefox, issue: viewer stuck loading)
+# ====================================================================
+# In a sandbox the page cannot call functions set by the script ("Permission denied").
+# Simulated: the probe function throws when the page calls it.
+SANDBOX = """Object.defineProperty(window, '__ripperProbe', { configurable: true,
+  set(v) { this.__p = () => { throw new Error('Permission denied to access property'); }; }, get() { return this.__p; } });"""
+
+
+def test_sandbox_leaves_viewer_alone(ripper):
+    r = ripper(extra_stub=SANDBOX)
+    r.page.wait_for_timeout(500)
+    assert not any(l.startswith('[Ripper] patched') for l in r.logs), 'no bundle is patched in a sandbox'
+    assert any('isolated sandbox' in l for l in r.logs)
+    status = r.page.text_content('#ripper-status')
+    assert 'sandbox' in status, status
